@@ -48,7 +48,17 @@ function Player({ url, title, poster, back }) {
       const c = cands[i];
       setStatus(processing);
       watchdog = setTimeout(() => { if (!settled && el.readyState < 3) advance(); }, isLocal ? 120000 : 15000);
-      if (c.hls && Hls.isSupported()) {
+      // On iPhone/iPad, prefer Safari's NATIVE HLS (el.src) over hls.js:
+      // recent iOS can run hls.js too, but MSE media is not AirPlay-castable
+      // and hides the AirPlay icon. Native HLS is the only path that gives
+      // the AirPlay button on Apple devices.
+      const nativeHls = el.canPlayType("application/vnd.apple.mpegurl");
+      if (c.hls && nativeHls) {
+        el.onplaying = () => { settled = true; clearTimeout(watchdog); setStatus(""); };
+        el.onerror = () => { if (!settled) advance(); };
+        el.src = c.url;
+        el.play().catch(() => {});
+      } else if (c.hls && Hls.isSupported()) {
         hls = new Hls({ manifestLoadingTimeOut: 12000 });
         hls.on(Hls.Events.MANIFEST_PARSED, () => { settled = true; clearTimeout(watchdog); setStatus(""); el.play().catch(() => {}); });
         hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) advance(); });

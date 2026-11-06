@@ -237,7 +237,11 @@ export default function TvPage() {
       };
       watchdogRef.current = watchdog;
 
-      if ((cand.engine === "hls" || cand.engine === "restream") && Hls.isSupported()) {
+      // On iPhone/iPad prefer native HLS (AirPlay requires native playback;
+      // hls.js/MSE media can't be cast). The native branch below also handles
+      // mp4 and transcode output, so it covers every engine on Apple devices.
+      const nativeHls = el.canPlayType("application/vnd.apple.mpegurl");
+      if ((cand.engine === "hls" || cand.engine === "restream") && !nativeHls && Hls.isSupported()) {
         const hlsCfg = {
           manifestLoadingTimeOut: 12000,
           fragLoadingTimeOut: 30000,
