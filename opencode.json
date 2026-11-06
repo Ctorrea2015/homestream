@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/glm-5.3-flash:cloud",
+  "providers": {
+    "ollama": {
+      "settings": {
+        "baseURL": "http://127.0.0.1:11434/v1"
+      },
+      "models": {
+        "glm-5.3-flash:cloud": {
+          "name": "GLM-5.3-Flash Cloud"
+        },
+        "qwen2.5-coder:1.5b": {
+          "name": "Qwen 2.5 Coder 1.5B (Local CPU)"
+        }
+      }
+    }
+  }
+}

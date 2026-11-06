@@ -1,0 +1,17 @@
+# dependencies & build
+node_modules/
+.next/
+out/
+
+# private data — credentials, library, settings (NEVER commit)
+.data/
+*.log
+logs/
+
+# big local binaries (ffmpeg/fprobe ~100MB, over GitHub's limit; download
+# separately from https://www.gyan.dev/ffmpeg/builds/ or via FFMPEG_PATH)
+tools/
+
+# OS noise
+Thumbs.db
+.DS_Store

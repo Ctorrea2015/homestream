@@ -1,0 +1,230 @@
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { NextResponse } from "next/server";
+import { findFfmpeg } from "@/lib/ffmpeg";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const HLS_ROOT = path.join(process.cwd(), ".data", "hls");
+
+/**
+ * One ffmpeg child per URL at a time — when a new request comes for the same
+ * URL (channel switch, player reload), the old instance is killed to stop CPU burn.
+ */
+const active = new Map();
+
+function killStale(url) {
+  for (const [oldUrl, child] of active) {
+    if (oldUrl !== url && !child.killed) child.kill("SIGKILL");
+    active.delete(oldUrl);
+  }
+}
+
+/**
+ * Hardware encode beats CPU encode 5:1 on ultrabook CPUs. Probe ffmpeg's
+ * encoders once and prefer, in order: Intel QuickSync (h264_qsv),
+ * NVIDIA NVENC, AMD AMF, then CPU (libx264).
+ */
+let encoderPromise = null;
+function pickEncoder() {
+  if (!encoderPromise) {
+    encoderPromise = (async () => {
+      const { ffmpeg } = findFfmpeg();
+      return new Promise((resolve) => {
+        const p = spawn(ffmpeg, ["-hide_banner", "-encoders"], { windowsHide: true });
+        let out = "";
+        p.stdout.on("data", (c) => (out += c.toString()));
+        p.on("error", () => resolve("libx264"));
+        p.on("close", () => {
+          if (/h264_qsv/.test(out)) resolve("h264_qsv");
+          else if (/h264_nvenc/.test(out)) resolve("h264_nvenc");
+          else if (/h264_amf/.test(out)) resolve("h264_amf");
+          else resolve("libx264");
+        });
+      });
+    })().catch(() => "libx264");
+  }
+  return encoderPromise;
+}
+
+/**
+ * Shared transcode pipeline: 720p cap + bitrate cap, hardware encoder when
+ * available. mode "mp4" pipes one endless fragmented MP4; mode "hls" writes
+ * a live HLS session (short segments + rolling playlist) that every native
+ * player — iPhones above all — handles the way apps like UHF/TiviMate do.
+ */
+function buildArgs(target, encoder, mode, dir) {
+  const args = [
+    "-hide_banner", "-loglevel", "error",
+    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+    "-user_agent", "HomeStream/1.0 VLC/3.0",
+    "-i", target,
+    "-map", "0:v:0",
+    "-map", "0:a:0?",
+    "-vf", "scale=-2:min(ih\\,720)",
+    "-b:v", "2.5M", "-maxrate", "3M", "-bufsize", "5M",
+  ];
+  if (encoder === "h264_qsv") {
+    args.push("-c:v", "h264_qsv");
+  } else if (encoder === "h264_nvenc") {
+    args.push("-c:v", "h264_nvenc", "-preset", "p1");
+  } else if (encoder === "h264_amf") {
+    args.push("-c:v", "h264_amf", "-quality", "speed");
+  } else {
+    args.push("-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency");
+  }
+  args.push("-c:a", "aac", "-b:a", "160k", "-ac", "2");
+
+  if (mode === "hls") {
+    args.push(
+      "-f", "hls",
+      "-hls_time", "3",
+      "-hls_list_size", "8",
+      "-hls_flags", "delete_segments+temp_file+independent_segments",
+      "-hls_segment_filename", `${dir}/s%05d.ts`,
+      `${dir}/index.m3u8`,
+    );
+  } else {
+    args.push(
+      "-f", "mp4",
+      "-movflags", "frag_keyframe+empty_moov+faststart",
+      "pipe:1",
+    );
+  }
+  return args;
+}
+
+/** Live HLS sessions: id → { dir, child, last } — pruned when unused. */
+const hlsSessions = new Map();
+
+function killHlsStale(id) {
+  for (const [oldId, s] of hlsSessions) {
+    if (oldId !== id && !s.child.killed) {
+      try { s.child.kill("SIGKILL"); } catch {}
+      hlsSessions.delete(oldId);
+    }
+  }
+}
+
+let pruneTimer = null;
+function startPrune() {
+  if (pruneTimer) return;
+  pruneTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, s] of hlsSessions) {
+      if (now - s.last > 10 * 60 * 1000) {
+        try { s.child.kill("SIGKILL"); } catch {}
+        fs.rm(s.dir, { recursive: true, force: true }).catch(() => {});
+        hlsSessions.delete(id);
+      }
+    }
+  }, 60_000);
+}
+
+/**
+ * GET /api/tv/transcode?u=<stream url>[&f=hls]
+ *
+ * f=hls     → native-ish HLS restream: ffmpeg writes an endless live
+ *             playlist into .data/hls/<id>/ and we redirect the player to
+ *             /api/tv/hls/<id>/index.m3u8. What iPhones (and every native
+ *             player app) expect.
+ * otherwise → browser-friendly fragmented MP4 for <video> src.
+ */
+export async function GET(request) {
+  const sp = new URL(request.url).searchParams;
+  const target = sp.get("u");
+  if (!target) return NextResponse.json({ error: "Missing stream url" }, { status: 400 });
+  // local torrent-engine paths are allowed too (they're served by this server)
+  const host = request.headers.get("host") || new URL(request.url).host;
+  const abs = /^https?:\/\//i.test(target) ? target : target.startsWith("/") ? `http://${host}${target}` : null;
+  if (!abs) {
+    return NextResponse.json({ error: "Only http(s) streams are supported" }, { status: 400 });
+  }
+
+  const { ffmpeg } = findFfmpeg();
+  if (!ffmpeg) return NextResponse.json({ error: "ffmpeg is not installed next to the app" }, { status: 500 });
+  startPrune();
+
+  const mode = sp.get("f") === "hls" ? "hls" : "mp4";
+
+  if (mode === "hls") {
+    const id = crypto.createHash("sha1").update(abs).digest("hex").slice(0, 12);
+    const dir = path.join(HLS_ROOT, id);
+    await fs.mkdir(dir, { recursive: true });
+    killStale(abs);
+    killHlsStale(id);
+
+    let s = hlsSessions.get(id);
+    if (!s || !s.child || s.child.exitCode !== null || s.child.killed) {
+      const encoder = await pickEncoder();
+      const child = spawn(ffmpeg, buildArgs(abs, encoder, "hls", dir), { windowsHide: true });
+      s = { dir, child, last: Date.now() };
+      hlsSessions.set(id, s);
+      child.on("close", () => {
+        if (hlsSessions.get(id)?.child === child && child.exitCode !== 0) hlsSessions.delete(id);
+      });
+    } else {
+      s.last = Date.now();
+    }
+
+    // Wait until ffmpeg has emitted a real live playlist (first segment done).
+    const playlist = path.join(dir, "index.m3u8");
+    for (let waited = 0; waited < 12000; waited += 400) {
+      const txt = await fs.readFile(playlist, "utf8").catch(() => null);
+      if (txt && txt.includes("#EXTINF")) break;
+      if (s.child.exitCode !== null) {
+        return NextResponse.json(
+          { error: "ffmpeg could not restream this channel — the source may be offline" },
+          { status: 502 },
+        );
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    const ready = await fs.readFile(playlist, "utf8").catch(() => null);
+    if (!ready || !ready.includes("#EXTINF")) {
+      try { s.child.kill("SIGKILL"); } catch {}
+      hlsSessions.delete(id);
+      return NextResponse.json({ error: "Channel did not start converting in time — try again or another channel" }, { status: 504 });
+    }
+
+    // Redirect so the player loads the playlist at its canonical path and
+    // relative segment URLs resolve to /api/tv/hls/<id>/….
+    // Echo the Host the client actually used (never the raw bind address,
+    // which can be 0.0.0.0 when the server listens on all interfaces).
+    const host = request.headers.get("host") || new URL(request.url).host;
+    return NextResponse.redirect(new URL(`/api/tv/hls/${id}/index.m3u8`, `http://${host}`), 302);
+  }
+
+  killStale(abs);
+  for (const [, s2] of hlsSessions) {
+    if (!s2.child.killed) { try { s2.child.kill("SIGKILL"); } catch {} }
+  }
+  hlsSessions.clear();
+
+  const encoder = await pickEncoder();
+  const child = spawn(ffmpeg, buildArgs(abs, encoder, "mp4"), { windowsHide: true });
+  active.set(abs, child);
+
+  let stderrTail = "";
+  child.stderr.on("data", (d) => { stderrTail = (stderrTail + d.toString()).slice(-500); });
+  child.on("error", (err) => stderrTail += `\nspawn error: ${err.message}`);
+  child.on("close", () => active.delete(abs));
+
+  // Give ffmpeg a moment to fail fast on unreachable/garbage input.
+  await new Promise((r) => setTimeout(r, 250));
+  if (child.exitCode !== null) {
+    return NextResponse.json({ error: `ffmpeg could not read the stream: ${stderrTail || "unknown error"}` }, { status: 502 });
+  }
+
+  const web = Readable.toWeb(child.stdout);
+  return new Response(web, {
+    headers: {
+      "Content-Type": "video/mp4",
+      "Cache-Control": "no-store",
+    },
+  });
+}

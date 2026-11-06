@@ -1,0 +1,26 @@
+
+> homestream@0.1.0 dev
+> next dev -H 0.0.0.0 -p 3000
+
+ ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of C:\Users\Tomex Construction\package-lock.json as the root directory.
+ To silence this warning, set `outputFileTracingRoot` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/output#caveats for more information.
+ Detected additional lockfiles: 
+   * C:\Users\Tomex Construction\Downloads\streaming app\package-lock.json
+
+   ▲ Next.js 15.5.29
+   - Local:        http://localhost:3000
+   - Network:      http://0.0.0.0:3000
+
+ ✓ Starting...
+ ⨯ node:crypto
+Module build failed: UnhandledSchemeError: Reading from "node:crypto" is not handled by plugins (Unhandled scheme).
+Webpack supports "data:" and "file:" URIs by default.
+You may need an additional plugin to handle "node:" URIs.
+Import trace for requested module:
+node:crypto
+./lib/videos.js
+./lib/autoscan.js
+ ✓ Ready in 2.1s
+ ○ Compiling /instrumentation ...
