@@ -192,7 +192,7 @@ export default function GuidePage() {
             >
               <div style={{ position: "relative" }}>
                 <div style={{ width: "100%", aspectRatio: "16/9", background: "#000", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
-                  {selected ? <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%" }} /> : null}
+                  {selected ? <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%" }} /> : null}
                 </div>
                 {zoomed && (
                   <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 8, zIndex: 5 }}>

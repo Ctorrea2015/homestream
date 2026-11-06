@@ -106,7 +106,7 @@ export default function WatchPage() {
         {video && (
           <>
             <div className="playerBox">
-              <video ref={videoRef} controls autoPlay src={`/api/stream?id=${video.id}`} />
+              <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay src={`/api/stream?id=${video.id}`} />
             </div>
 
             <h1 className="wtitle">{video.name}</h1>

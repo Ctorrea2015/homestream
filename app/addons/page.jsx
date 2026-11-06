@@ -67,7 +67,7 @@ function Player({ url, title, poster, back }) {
 
   return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
-      <video ref={videoRef} controls autoPlay playsInline />
+      <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
       <PipButton videoRef={videoRef} style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }} />
       <div style={{ padding: "8px 2px 0" }}>
         {status && <div className="notice" style={{ color: "var(--muted)" }}>{status}</div>}

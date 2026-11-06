@@ -89,7 +89,7 @@ function Player({ url, title, poster, back }) {
 
   return (
     <div className="playerBox" style={{ position: "relative" }}>
-      <video ref={videoRef} controls autoPlay playsInline />
+      <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
       <div style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }}>
         <PipButton videoRef={videoRef} />
       </div>
