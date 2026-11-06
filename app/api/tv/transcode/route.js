@@ -84,7 +84,9 @@ function buildArgs(target, encoder, mode, dir) {
       "-f", "hls",
       "-hls_time", "3",
       "-hls_list_size", "8",
-      "-hls_flags", "delete_segments+temp_file+independent_segments",
+      // NB: no "temp_file" — its rename-into-place is denied on Windows
+      // (segment .tmp opens fail) and killed every HLS session mid-movie.
+      "-hls_flags", "delete_segments+independent_segments",
       "-hls_segment_filename", `${dir}/s%05d.ts`,
       `${dir}/index.m3u8`,
     );
@@ -164,7 +166,14 @@ export async function GET(request) {
       const child = spawn(ffmpeg, buildArgs(abs, encoder, "hls", dir), { windowsHide: true });
       s = { dir, child, last: Date.now() };
       hlsSessions.set(id, s);
-      child.on("close", () => {
+      child.stderr.on("data", (d) => {
+        const tail = d.toString().slice(-300);
+        if (tail.includes("error") || tail.includes("Error") || tail.includes("failed")) {
+          console.error(`[hls ${id}] ffmpeg: ${tail}`.replace(/\n+/g, " | "));
+        }
+      });
+      child.on("close", (code, sig) => {
+        if (code !== 0 || sig !== 'SIGKILL') console.error(`[hls ${id}] ffmpeg exited code=${code} sig=${sig}`);
         if (hlsSessions.get(id)?.child === child && child.exitCode !== 0) hlsSessions.delete(id);
       });
     } else {

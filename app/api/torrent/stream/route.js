@@ -52,7 +52,10 @@ export async function GET(request) {
 
   const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
   let start = m && m[1] ? parseInt(m[1], 10) : 0;
-  let end = m && m[2] ? parseInt(m[2], 10) : Math.min(file.length - 1, start + 4 * 1024 * 1024 - 1); // first ~4MB when open-ended
+  // Open-ended requests must stream all the way to EOF. Capping them (the old
+  // 4MB cap) made transcoders like ffmpeg hit EOF and abort mid-convert, and
+  // stalled every HLS session after 3 segments.
+  let end = m && m[2] ? parseInt(m[2], 10) : file.length - 1;
   if (isNaN(start) || start > end || end >= file.length) {
     return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${file.length}` } });
   }
