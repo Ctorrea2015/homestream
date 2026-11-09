@@ -16,25 +16,35 @@ function catalogUrl(addon, type, catId, extras = "") {
  * a merged poster list, newest addons first. Addons that don't support
  * search are skipped silently.
  */
+/**
+ * GET /api/addons/search?q=Suits[&type=movie|series]
+ * Searches every installed addon. When `type` is omitted, BOTH movie and
+ * series are searched and merged (so TV shows actually show up when you
+ * search their names).
+ */
 export async function GET(request) {
   const p = new URL(request.url).searchParams;
   const q = (p.get("q") || "").trim();
-  const type = (p.get("type") || "movie").replace(/[^a-z]/gi, "");
+  const type = (p.get("type") || "").replace(/[^a-z]/gi, "");
   if (!q) return NextResponse.json({ metas: [] });
+  const wanted = type ? [type] : ["movie", "series"];
 
   const addons = await readAddons();
-  const usable = addons.filter((a) => a.types.includes(type) || a.types.includes("all") || a.types.length === 0);
-
   const encoded = encodeURIComponent(q.slice(0, 80));
-  const attempts = usable.flatMap((addon) => {
-    const cats = (addon.catalogs || []).filter((c) => !c.type || c.type === type);
-    const ids = ["search", ...cats.map((c) => c.id || "top")];
-    return ids.slice(0, 3).map((id) => ({ addon, id: id }));
-  });
+
+  const attempts = [];
+  for (const t of wanted) {
+    const usable = addons.filter((a) => a.types.includes(t) || a.types.includes("all") || a.types.length === 0);
+    for (const addon of usable) {
+      const cats = (addon.catalogs || []).filter((c) => !c.type || c.type === t);
+      const ids = ["search", ...cats.map((c) => c.id || "top")];
+      for (const id of ids.slice(0, 3)) attempts.push({ addon, t, id });
+    }
+  }
 
   const settled = await Promise.allSettled(
-    attempts.map(({ addon, id }) =>
-      fetch(catalogUrl(addon, type, id, `search=${encoded}`), {
+    attempts.map(({ addon, t, id }) =>
+      fetch(catalogUrl(addon, t, id, `search=${encoded}`), {
         headers: { "User-Agent": "HomeStream/1.0" },
         signal: AbortSignal.timeout(20000),
       }).then((r) => (r.ok ? r.json() : null))
@@ -51,7 +61,7 @@ export async function GET(request) {
       seen.add(key);
       metas.push({
         id: String(m.id),
-        type: m.type || type,
+        type: m.type || wanted[0],
         name: m.name || "",
         poster: m.poster || "",
         year: m.releaseInfo ? String(m.releaseInfo).match(/\d{4}/)?.[0] : "",

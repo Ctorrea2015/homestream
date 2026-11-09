@@ -121,7 +121,7 @@ export default function AddonsPage() {
     setSearching(true);
     searchTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/addons/search?q=${encodeURIComponent(q)}&type=movie`);
+        const res = await fetch(`/api/addons/search?q=${encodeURIComponent(q)}`); // movies + series together
         const out = await res.json();
         setSearchResults(res.ok ? out.metas : []);
       } catch {
@@ -222,7 +222,7 @@ export default function AddonsPage() {
         <div className="head">
           <button className="menuBtn" aria-label="Open menu" onClick={() => setMenuOpen(true)}>☰</button>
           <h1>Addons</h1>
-          <input className="search" placeholder="🔍 Search movies across addons…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input className="search" placeholder="🔍 Search movies & shows across addons…" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
 
         {playing && <Player url={playing.url} title={playing.title} poster={playing.poster || ""} back={() => { setPlaying(null); setCwKey((k) => k + 1); }} />}
