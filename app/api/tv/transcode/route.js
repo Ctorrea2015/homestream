@@ -43,6 +43,7 @@ function pickEncoder() {
           if (/h264_qsv/.test(out)) resolve("h264_qsv");
           else if (/h264_nvenc/.test(out)) resolve("h264_nvenc");
           else if (/h264_amf/.test(out)) resolve("h264_amf");
+          else if (/h264_v4l2m2m/.test(out)) resolve("h264_v4l2m2m");
           else resolve("libx264");
         });
       });
@@ -74,6 +75,10 @@ function buildArgs(target, encoder, mode, dir) {
     args.push("-c:v", "h264_nvenc", "-preset", "p1");
   } else if (encoder === "h264_amf") {
     args.push("-c:v", "h264_amf", "-quality", "speed");
+  } else if (encoder === "h264_v4l2m2m") {
+    // Raspberry Pi video hardware encoder — the only way 1080p transcodes
+    // stay watchable on a Pi's small CPU.
+    args.push("-c:v", "h264_v4l2m2m", "-b:v", "2.5M");
   } else {
     args.push("-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency");
   }
