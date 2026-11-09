@@ -394,7 +394,17 @@ export default function AddonsPage() {
                     className="btn"
                     style={{ display: "block", width: "100%", marginTop: 6, textAlign: "left", padding: "8px 12px", opacity: s.playable ? 1 : 0.5 }}
                     disabled={!s.playable}
-                    onClick={() => s.playable && setPlaying({ url: s.url, title: `${detail.name}${selEp && selEp.includes(":") ? ` ${selEp.split(":").slice(1).map(Number).map(n => "S" + String(n).padStart(2, "0")).join("E")}` : ""}${s.quality ? ` — ${s.quality}` : ""} (${s.addon})`, poster: detail.poster || "" })}
+                    onClick={() => {
+                      const epTag = selEp && selEp.includes(":")
+                        ? selEp.split(":").slice(1)
+                        : null;
+                      const epKey = epTag ? `S${String(epTag[0]).padStart(2, "0")}E${String(epTag[1] || 0).padStart(2, "0")}` : "";
+                      return s.playable && setPlaying({
+                        url: s.url + (s.source === "torrent" && epKey ? `&ep=${epKey}` : ""),
+                        title: `${detail.name}${epKey ? ` ${epKey}` : ""}${s.quality ? ` — ${s.quality}` : ""} (${s.addon})`,
+                        poster: detail.poster || "",
+                      });
+                    }}
                   >
                     {s.playable ? (s.source === "torrent" ? "🌐" : "▶") : "🚫"} {s.addon}{s.addon && " — "}{s.title}{s.quality ? ` · ${s.quality}` : ""}{s.size ? ` · ${s.size}` : ""}
                     {s.source === "torrent" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (streamed by server torrent engine)</span>}

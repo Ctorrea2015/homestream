@@ -19,7 +19,7 @@ const MIME = {
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const infoHash = ((sp.get("infoHash")) || "").toLowerCase();
-  const nameHint = sp.get("name") || "";
+  const nameHint = sp.get("name") + " " + (sp.get("ep") || "").toUpperCase(); // "S01E02" helps pick the right file in season packs
   if (!/^[a-f0-9]{40}$/.test(infoHash)) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
   }
