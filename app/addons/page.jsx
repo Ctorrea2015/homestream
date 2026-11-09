@@ -9,30 +9,40 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const DEMO_NOTE = "Tip: e.g. https://v3-cinemeta.strem.io/manifest.json (official movie/show catalogs)";
 
-function Player({ url, title, poster, back }) {
+function Player({ url, sources, title, poster, back }) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState("Connecting…");
   useWatchProgress(videoRef, url, { title, poster, type: "movie" });
   const proxy = (u) => `/api/tv/play?u=${encodeURIComponent(u)}`;
 
   useEffect(() => {
-    // Same-origin URLs (server torrent engine) play directly; remote URLs
-    // go through the usual proxy + transcode fallback chain.
-    const isLocal = url.startsWith("/");
-    const safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent || "");
-    // Torrents are often HEVC or in .mkv containers — Chrome usually copes
-    // directly, but iPhone Safari stalls silently on those. On Safari we
-    // therefore convert first; elsewhere we try the direct stream, then convert.
-    const localCands = [
-      { url: `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`, hls: true, label: "⚙️ Converting on the server (browser-safe) — starting…" },
-      { url, hls: /\.m3u8/i.test(url) },
+    // Candidate chain: every playable stream (the picked source FIRST, then
+    // the rest of the addon's sources), each tried direct→convert. Torrent
+    // swarms differ wildly in health — cycling sources automatically makes
+    // TV shows behave like movies instead of dying on one dead swarm.
+    const all = [
+      ...(sources || []),
+      ...(url ? [{ url, label: "" }] : []),
     ];
-    const cands = isLocal
-      ? (safari ? localCands : [...localCands.reverse()])
-      : /\.m3u8/i.test(url)
-        ? [{ url: proxy(url), hls: true }, { url: `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`, hls: true }]
-        : [{ url: proxy(url) }, { url: `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`, hls: true }];
-    const processing = isLocal ? "⚙️ Torrent engine: downloading on the server (first play can take a minute)…" : "Connecting…";
+    const safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent || "");
+    const cands = [];
+    all.forEach((s, k) => {
+      const isLocal = s.url.startsWith("/");
+      const shared = s.label ? ` ${s.label}` : "";
+      if (isLocal) {
+        const pair = [
+          { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls`, hls: true, label: `⚙️ Converting on the server (browser-safe)${shared} — starting…` },
+          { url: s.url, hls: /\.m3u8/i.test(s.url), label: "" },
+        ];
+        for (const c of (safari ? pair : pair.concat().reverse())) {
+          cands.push({ ...c, src: k + 1, of: all.length, title: s.title || "" });
+        }
+      } else {
+        cands.push({ url: proxy(s.url), hls: /\.m3u8/i.test(s.url), src: k + 1, of: all.length, label: `Connecting${shared}…` });
+        cands.push({ url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls`, hls: true, src: k + 1, of: all.length, label: `⚙️ Converting${shared}…` });
+      }
+    });
+
     let i = 0, settled = false, hls = null, watchdog = null;
     const el = videoRef.current;
 
@@ -44,10 +54,14 @@ function Player({ url, title, poster, back }) {
     }
     function advance() { cleanup(); i += 1; tryCand(); }
     function tryCand() {
-      if (i >= cands.length) { setStatus("This source failed to play."); return; }
+      if (i >= cands.length) { setStatus("All sources failed — the torrent swarms are quiet right now. Try again later or another title."); return; }
       const c = cands[i];
-      setStatus(processing);
-      watchdog = setTimeout(() => { if (!settled && el.readyState < 3) advance(); }, isLocal ? 120000 : 15000);
+      const srcTag = c.of > 1 ? `Source ${c.src}/${c.of} — ` : "";
+      let processing = c.url.startsWith("/")
+        ? (c.label || "⚙️ Torrent engine: downloading on the server (first play can take a minute)…")
+        : (c.label || "Connecting…");
+      setStatus(`${srcTag}${processing}`);
+      watchdog = setTimeout(() => { if (!settled && el.readyState < 3) advance(); }, c.url.startsWith("/") ? 120000 : 15000);
       // On iPhone/iPad, prefer Safari's NATIVE HLS (el.src) over hls.js:
       // recent iOS can run hls.js too, but MSE media is not AirPlay-castable
       // and hides the AirPlay icon. Native HLS is the only path that gives
@@ -73,7 +87,7 @@ function Player({ url, title, poster, back }) {
     }
     tryCand();
     return cleanup;
-  }, [url]);
+  }, [url, sources]);
 
   return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
@@ -260,7 +274,7 @@ export default function AddonsPage() {
           <input className="search" placeholder="🔍 Search movies & shows across addons…" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
 
-        {playing && <Player url={playing.url} title={playing.title} poster={playing.poster || ""} back={() => { setPlaying(null); setCwKey((k) => k + 1); }} />}
+        {playing && <Player url={playing.url} sources={playing.sources} title={playing.title} poster={playing.poster || ""} back={() => { setPlaying(null); setCwKey((k) => k + 1); }} />}
 
         {!playing && (
           <ContinueRow
@@ -399,8 +413,19 @@ export default function AddonsPage() {
                         ? selEp.split(":").slice(1)
                         : null;
                       const epKey = epTag ? `S${String(epTag[0]).padStart(2, "0")}E${String(epTag[1] || 0).padStart(2, "0")}` : "";
+                      const chosen = { url: s.url + (s.source === "torrent" && epKey ? `&ep=${epKey}` : ""), label: "" };
+                      // Keep the other playable sources as automatic backups —
+                      // if this torrent's swarm is quiet, the next one starts.
+                      const backups = (streams || [])
+                        .filter((x) => x !== s && x.playable && x.source === "torrent")
+                        .slice(0, 8)
+                        .map((x) => ({
+                          url: epKey && !x.url.includes("ep=") ? `${x.url}&ep=${epKey}` : x.url,
+                          label: (x.title || "").replace(/\s+/g, " ").slice(0, 60),
+                        }));
                       return s.playable && setPlaying({
-                        url: s.url + (s.source === "torrent" && epKey ? `&ep=${epKey}` : ""),
+                        url: chosen.url,
+                        sources: [chosen, ...backups],
                         title: `${detail.name}${epKey ? ` ${epKey}` : ""}${s.quality ? ` — ${s.quality}` : ""} (${s.addon})`,
                         poster: detail.poster || "",
                       });
