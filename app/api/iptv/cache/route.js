@@ -17,11 +17,12 @@ export async function GET(request) {
   }
 }
 
-/** POST /api/iptv/cache — force a sync from the provider (categories+streams+EPG). */
-export async function POST() {
+/** POST /api/iptv/cache[?epg=0] — sync from the provider. epg=0 skips the big XMLTV download (low-RAM devices). */
+export async function POST(request) {
+  const skipEpg = new URL(request.url).searchParams.get("epg") === "0";
   try {
     const started = Date.now();
-    const stats = await syncAll();
+    const stats = await syncAll({ skipEpg });
     return NextResponse.json({ ok: true, ms: Date.now() - started, stats, db: dbStatus() });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 502 });
