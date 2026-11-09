@@ -99,6 +99,8 @@ export default function AddonsPage() {
   const [detail, setDetail] = useState(null); // meta
   const [streams, setStreams] = useState(null);
   const [playing, setPlaying] = useState(null); // { url, title }
+  const [episodes, setEpisodes] = useState(null); // series: episode list from Cinemeta
+  const [selEp, setSelEp] = useState(null); // series: episode id currently loaded ("tt..:1:2")
   const [menuOpen, setMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null); // null = off, [] = none
@@ -172,12 +174,45 @@ export default function AddonsPage() {
   }
 
   async function openDetail(m) {
-    setDetail(m); setStreams(null);
+    setDetail(m); setStreams(null); setEpisodes(null); setSelEp(null);
     setTimeout(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-    const usable = addons.filter((a) => a.types.includes(m.type) || a.types.includes("all"));
+    // Series need an episode picked: torrent sources are keyed per-episode
+    // (tt0108778:1:2), a show id alone returns nothing. Fetch the episode
+    // list from Cinemeta, default to S01E01.
+    if (m.type === "series") {
+      fetchEpisodes(m).catch(() => {});
+      await loadStreams(m.type, m.id);
+    } else {
+      await loadStreams(m.type, m.id);
+    }
+  }
+
+  function streamTargetType(m) {
+    return m.type || "movie";
+  }
+
+  async function fetchEpisodes(s) {
+    const d = await (await fetch(`/api/addons/meta?a=com.linvo.cinemeta&type=series&id=${encodeURIComponent(s.id)}`)).json();
+    const vids = (d?.meta?.videos || []).filter((v) => v.season > 0);
+    if (vids.length) {
+      setEpisodes(vids);
+      const first = vids.find((v) => v.season === 1 && v.episode === 1) || vids[0];
+      setSelEp(first.id);
+      loadStreams(first.type || "series", first.id);
+    }
+  }
+
+  function pickEpisode(v) {
+    setSelEp(v.id);
+    setStreams(null);
+    loadStreams(v.type || "series", v.id);
+  }
+
+  async function loadStreams(type, id) {
+    const usable = addons.filter((a) => a.types.includes(type) || a.types.includes("all"));
     const players = [];
     for (const a of usable) {
-      const res = await fetch(`/api/addons/stream?a=${encodeURIComponent(a.id)}&type=${m.type}&id=${encodeURIComponent(m.id)}`);
+      const res = await fetch(`/api/addons/stream?a=${encodeURIComponent(a.id)}&type=${type}&id=${encodeURIComponent(id)}`);
       const out = await res.json();
       if (res.ok) for (const s of out.streams) players.push({ ...s, addon: a.name });
     }
@@ -322,8 +357,35 @@ export default function AddonsPage() {
               </div>
             </div>
             <div style={{ marginTop: 10, fontWeight: 700 }}>
-              {streams ? (streams.length ? `🎞️ ${streams.length} source(s) found — click one to play` : "No addon sources for this title — try another movie") : "🔎 Checking installed addons for sources… (a few seconds)"}
+              {detail.type === "series" && episodes && episodes.length
+                ? (streams && streams.length ? `🎞️ ${streams.length} source(s) for ${selEp?.split(":").slice(1).map(Number).map((n) => String(n).padStart(2, "0")).join("×") || "episode"} — click one to play` : "🔎 Checking addons for this episode's sources…")
+                : (streams ? (streams.length ? `🎞️ ${streams.length} source(s) found — click one to play` : "No addon sources for this title — try another movie") : "🔎 Checking installed addons for sources… (a few seconds)")}
             </div>
+            {detail.type === "series" && episodes && episodes.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>Episodes</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 180, overflowY: "auto", padding: 2 }}>
+                  {episodes.map((v) => {
+                    const active = selEp === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        className="btn ghost"
+                        style={{
+                          fontSize: 12, padding: "4px 8px",
+                          borderColor: active ? "var(--accent, #7c6cff)" : undefined,
+                          fontWeight: active ? 700 : 400,
+                        }}
+                        onClick={() => pickEpisode(v)}
+                        title={v.name || ""}
+                      >
+                        S{String(v.season).padStart(2, "0")}E{String(v.episode).padStart(2, "0")}{v.name ? ` · ${v.name}` : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {streams && streams.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 {streams.map((s, i) => (
@@ -332,7 +394,7 @@ export default function AddonsPage() {
                     className="btn"
                     style={{ display: "block", width: "100%", marginTop: 6, textAlign: "left", padding: "8px 12px", opacity: s.playable ? 1 : 0.5 }}
                     disabled={!s.playable}
-                    onClick={() => s.playable && setPlaying({ url: s.url, title: `${detail.name}${s.quality ? ` — ${s.quality}` : ""} (${s.addon})`, poster: detail.poster || "" })}
+                    onClick={() => s.playable && setPlaying({ url: s.url, title: `${detail.name}${selEp && selEp.includes(":") ? ` ${selEp.split(":").slice(1).map(Number).map(n => "S" + String(n).padStart(2, "0")).join("E")}` : ""}${s.quality ? ` — ${s.quality}` : ""} (${s.addon})`, poster: detail.poster || "" })}
                   >
                     {s.playable ? (s.source === "torrent" ? "🌐" : "▶") : "🚫"} {s.addon}{s.addon && " — "}{s.title}{s.quality ? ` · ${s.quality}` : ""}{s.size ? ` · ${s.size}` : ""}
                     {s.source === "torrent" && <span style={{ color: "var(--muted)", fontSize: 12 }}> (streamed by server torrent engine)</span>}
