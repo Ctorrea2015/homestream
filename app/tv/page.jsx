@@ -263,6 +263,7 @@ export default function TvPage() {
             : {}),
         };
         hls = new Hls(hlsCfg);
+        resyncAllowed = !!antiLag; // genuine low-latency path — rate catch-up allowed
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           settled = true;
           clearTimeout(watchdog);
@@ -326,9 +327,14 @@ export default function TvPage() {
     // as stutter/skipping, so instead we briefly raise the playback rate
     // (up to +30%) until we're within ~1.5s of live again. Only a huge
     // drift (>60s: long pause / backgrounded tab) justifies an actual jump.
+    // NB: this ONLY makes sense for the hls.js low-latency path, where "far
+    // behind the edge" is real. On native HLS (iPhones) a big buffered-ahead
+    // window is normal and healthy — rate-raising there mis-reads buffer as
+    // lag and THROTTLES playback into stalls, so it must stay off there.
+    let resyncAllowed = false; // flipped on only in the hls.js branch
     const resync = setInterval(() => {
       const el2 = videoRef.current;
-      if (!el2 || el2.paused) return;
+      if (!resyncAllowed || !el2 || el2.paused) return;
       const buf = el2.buffered;
       const end = buf.length ? buf.end(buf.length - 1) : el2.currentTime;
       const drift = end - el2.currentTime;
