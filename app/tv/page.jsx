@@ -25,7 +25,7 @@ function buildCandidates(ch) {
   // Xtream-style portals: the numeric id in the URL lets us route through
   // the server's cached IPTV resolver — retries, playlist rewriting and
   // segment proxying all live there. Proven healthier than the raw URL.
-  const xtream = /(\d{4,10})\.m3u8($|\?)/i.exec(url);
+  const xtream = /\/(\d{4,10})\.m3u8($|\?)/i.exec(url);
   const restream = `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`;
   const transcode = `/api/tv/transcode?u=${encodeURIComponent(url)}`;
 
@@ -223,7 +223,8 @@ export default function TvPage() {
       const cand = candidates[candidateIdx];
       const url = cand.engine === "hls"
         ? `/api/tv/play?u=${encodeURIComponent(cand.url)}` // remote playlist → relay through CORS proxy
-        : cand.url;                                        // restream & native urls are already same-origin      setStatus(cand.label || "Connecting…");
+        : cand.url;                                        // restream & native urls are already same-origin
+      setStatus(cand.label || "Connecting…");
 
       const watchdog = setTimeout(() => {
         // Attempt never produced playable data — move to the next format.
