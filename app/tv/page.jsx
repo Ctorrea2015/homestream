@@ -22,11 +22,16 @@ function buildCandidates(ch) {
   const url = ch.url;
   const cands = [];
   const push = (u, engine, label) => cands.push({ url: u, engine, label });
-  // Server-side HLS restream: real live segments from ffmpeg — this is the
-  // native, smooth path for iPhones (and any player without MSE).
+  // Xtream-style portals: the numeric id in the URL lets us route through
+  // the server's cached IPTV resolver — retries, playlist rewriting and
+  // segment proxying all live there. Proven healthier than the raw URL.
+  const xtream = /(\d{4,10})\.m3u8($|\?)/i.exec(url);
   const restream = `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`;
   const transcode = `/api/tv/transcode?u=${encodeURIComponent(url)}`;
 
+  if (xtream) {
+    push(`/api/iptv/live/${xtream[1]}.m3u8`, "hlsdirect", "");
+  }
   if (HLS_RE.test(url)) {
     push(url, "hls", "");
   } else if (TS_RE.test(url)) {
@@ -218,8 +223,7 @@ export default function TvPage() {
       const cand = candidates[candidateIdx];
       const url = cand.engine === "hls"
         ? `/api/tv/play?u=${encodeURIComponent(cand.url)}` // remote playlist → relay through CORS proxy
-        : cand.url;                                        // restream & native urls are already same-origin
-      setStatus(cand.label || "Connecting…");
+        : cand.url;                                        // restream & native urls are already same-origin      setStatus(cand.label || "Connecting…");
 
       const watchdog = setTimeout(() => {
         // Attempt never produced playable data — move to the next format.
@@ -241,7 +245,7 @@ export default function TvPage() {
       // hls.js/MSE media can't be cast). The native branch below also handles
       // mp4 and transcode output, so it covers every engine on Apple devices.
       const nativeHls = el.canPlayType("application/vnd.apple.mpegurl");
-      if ((cand.engine === "hls" || cand.engine === "restream") && !nativeHls && Hls.isSupported()) {
+      if ((cand.engine === "hls" || cand.engine === "restream" || cand.engine === "hlsdirect") && !nativeHls && Hls.isSupported()) {
         const hlsCfg = {
           manifestLoadingTimeOut: 12000,
           fragLoadingTimeOut: 30000,
