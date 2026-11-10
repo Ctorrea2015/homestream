@@ -451,7 +451,22 @@ export default function HomePage() {
           <section className="hrow">
             <h2>▶ Continue watching</h2>
             <div className="grid" style={{ marginTop: 12 }}>
-              {continueRow.map((v) => <Card key={v.id} v={v} progress={lastWatched[v.id]} />)}
+              {continueRow.map((v) => (
+                <div key={v.id} style={{ position: "relative" }}>
+                  <Card v={v} progress={lastWatched[v.id]} />
+                  <span
+                    role="button"
+                    aria-label="Remove from Continue Watching"
+                    onClick={() => {
+                      const raw = JSON.parse(localStorage.getItem("hs_progress") || "{}");
+                      delete raw[v.id];
+                      localStorage.setItem("hs_progress", JSON.stringify(raw));
+                      setLastWatched({ ...raw });
+                    }}
+                    style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,.6)", borderRadius: "50%", width: 22, height: 22, lineHeight: "22px", fontSize: 12, textAlign: "center", cursor: "pointer", zIndex: 2 }}
+                  >✕</span>
+                </div>
+              ))}
             </div>
           </section>
         )}
