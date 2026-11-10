@@ -17,7 +17,8 @@ function buildVodCandidates(url) {
   if (/\.mp4($|\?)/i.test(url) || /\.m3u8($|\?)/i.test(url)) {
     cands.push({ url: proxy, engine: "native", label: "" });
   } else if (/\.(mkv|avi|wmv|flv|mpeg|mpg)$/i.test(url)) {
-    // browsers can't play these natively — go straight to the converter
+    // Try the player first (Chrome copes with many mkv/avi), then convert.
+    cands.push({ url: proxy, engine: "native", label: "" });
     cands.push({ url: transcode, engine: "native", label: "Converting…" });
   } else {
     cands.push({ url: proxy, engine: "native", label: "" });
@@ -186,8 +187,16 @@ export default function VodPage() {
     setRefreshing(false);
   }
 
-  function play(item, labelOverride) {
-    const url = item.url || item.urlFromApi;
+  async function play(item, labelOverride) {
+    let url = item.url || item.urlFromApi;
+    // Older cached catalogs have no url field — resolve it live against the
+    // provider so a movie click always has something to play.
+    if (!url && item.prov && item.id) {
+      try {
+        const res = await fetch(`/api/vod/movie-url?prov=${encodeURIComponent(item.prov)}&id=${encodeURIComponent(item.id)}&container=${encodeURIComponent(item.container || "mp4")}`);
+        url = (await res.json()).url || url;
+      } catch {}
+    }
     if (!url) return;
     setPlaying({ url, title: labelOverride ? `${item.title} · ${labelOverride}` : item.title, poster: item.poster || "" });
     setMenuOpen(false);
