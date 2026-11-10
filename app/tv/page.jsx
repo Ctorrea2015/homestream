@@ -267,7 +267,7 @@ export default function TvPage() {
         hls.on(Hls.Events.ERROR, (_e, d) => {
           if (!d.fatal) return;
           // Anti-freeze: reconnect/recover a few times before falling through
-          if (antiFreeze && d.type === Hls.ErrorTypes.NETWORK_ERROR && repairs < 2) {
+          if (antiFreeze && d.type === Hls.ErrorTypes.NETWORK_ERROR && repairs < 4) {
             repairs += 1;
             setStatus("🧊 Connection lost — reconnecting…");
             try { hls.startLoad(); } catch {}
@@ -286,13 +286,24 @@ export default function TvPage() {
       } else {
         // native <video> (mp4 family, transcode output, Safari native HLS —
         // this is the branch iPhones take for both hls + restream formats)
+        let nativeReconnects = 0;
         el.onerror = () => {
           if (settled) return; // stream dropped mid-watch — let the player UI show it
           advance();
         };
+        // A live stream that reaches its end (provider cut the pipe, or a
+        // playlist with #EXT-X-ENDLIST) auto-pauses. Reconnect at the live
+        // edge instead of leaving a paused screen.
+        el.onended = () => {
+          if (!antiFreeze || nativeReconnects >= 3) return;
+          nativeReconnects += 1;
+          setStatus("🧊 Stream ended — reconnecting at live edge…");
+          try { el.load(); el.play().catch(() => {}); } catch {}
+        };
         el.onplaying = () => {
           settled = true;
           clearTimeout(watchdog);
+          nativeReconnects = 0;
           if (cand.label) setStatus("");
         };
         el.src = url;
@@ -335,7 +346,10 @@ export default function TvPage() {
     // after repeated failures move on to the next playback format.
     const freezeWatch = setInterval(() => {
       const el2 = videoRef.current;
-      if (!el2 || el2.paused || !el2.currentTime || el2.currentTime <= 1) { lastTime = el2 ? el2.currentTime : 0; return; }
+      // NB: treat "ended" as a stalled stream too — live playlists that hit
+      // their end (or a provider that cut the pipe) auto-pause the <video>,
+      // and without this check a paused-but-dead stream never got repaired.
+      if (!el2 || (el2.paused && !el2.ended) || !el2.currentTime || el2.currentTime <= 1) { lastTime = el2 ? el2.currentTime : 0; return; }
       if (Math.abs(el2.currentTime - lastTime) < 0.1) {
         stallTicks += 1;
         console.log("[anti-freeze] stalled", stallTicks);
