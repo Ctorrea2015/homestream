@@ -95,11 +95,30 @@ export default function GuidePage() {
       const cand = candidates[idx];
       if (cand.hls && Hls.isSupported()) {
         hls = new Hls({ manifestLoadingTimeOut: 12000, fragLoadingTimeOut: 30000, capLevelToPlayerSize: true });
+        let recoveries = 0;
         hls.on(Hls.Events.MANIFEST_PARSED, () => { settled = true; el.play().catch(() => {}); });
         hls.on(Hls.Events.ERROR, (_e, d) => {
-          if (!d.fatal || settled) return;
+          if (!d.fatal) return;
+          // Live IPTV provider hiccups are routine: recover in-place before
+          // giving up. Without this the stream just freezes mid-play.
+          if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recoveries < 4) {
+            recoveries += 1; hls.recoverMediaError(); return;
+          }
+          if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recoveries < 6) {
+            recoveries += 1; hls.startLoad(); return;
+          }
           cleanup(); idx += 1; tryCand();
         });
+        // Watchdog: if the buffer runs dry while "playing", kick hls.js to
+        // resume loading — some upstreams stall the connection silently.
+        const kick = setInterval(() => {
+          if (!hls || settled !== true) return;
+          if (!el.paused && el.readyState < 3 && el.currentTime > 0) {
+            try { hls.startLoad(); } catch {}
+          }
+        }, 5000);
+        const origCleanup = cleanup;
+        cleanup = () => { clearInterval(kick); origCleanup(); };
         hls.loadSource(cand.url);
         hls.attachMedia(el);
       } else {
