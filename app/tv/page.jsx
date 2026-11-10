@@ -292,6 +292,9 @@ export default function TvPage() {
         // native <video> (mp4 family, transcode output, Safari native HLS —
         // this is the branch iPhones take for both hls + restream formats)
         let nativeReconnects = 0;
+        // Everything is relayed through the server (provider streams can't be
+        // played directly — CORS, and the Pi stays the single access point).
+        // Native HLS on Apple devices gets the same server-hosted playlist.
         el.onerror = () => {
           if (settled) return; // stream dropped mid-watch — let the player UI show it
           advance();
