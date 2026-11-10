@@ -178,8 +178,9 @@ export async function GET(request) {
         }
       });
       child.on("close", (code, sig) => {
-        if (code !== 0 || sig !== 'SIGKILL') console.error(`[hls ${id}] ffmpeg exited code=${code} sig=${sig}`);
-        if (hlsSessions.get(id)?.child === child && child.exitCode !== 0) hlsSessions.delete(id);
+        if (sig === "SIGKILL" || code === 0) return; // intentional stop / clean exit
+        console.error(`[hls ${id}] ffmpeg exited code=${code} sig=${sig}`);
+        if (hlsSessions.get(id)?.child === child) hlsSessions.delete(id);
       });
     } else {
       s.last = Date.now();
@@ -214,10 +215,8 @@ export async function GET(request) {
   }
 
   killStale(abs);
-  for (const [, s2] of hlsSessions) {
-    if (!s2.child.killed) { try { s2.child.kill("SIGKILL"); } catch {} }
-  }
-  hlsSessions.clear();
+  // NB: mp4-mode must NOT nuke other hlsSessions — they belong to other
+  // viewers/devices (someone else's Live TV). Each prunes itself when idle.
 
   const encoder = await pickEncoder();
   const child = spawn(ffmpeg, buildArgs(abs, encoder, "mp4"), { windowsHide: true });
