@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTorrent, pickVideoFile } from "@/lib/torrent";
+import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +37,7 @@ export async function GET(request) {
 
   t._hsTouch = Date.now();
   const file = pick.file;
+  prioritizePieces(t, file); // aim the swarm at this file's pieces
   const ext = pick.ext;
   const headers = {
     "Content-Type": MIME[ext] || "application/octet-stream",
