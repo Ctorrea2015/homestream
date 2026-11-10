@@ -24,7 +24,10 @@ function Player({ url, sources, title, poster, back }) {
       ...(sources || []),
       ...(url ? [{ url, label: "" }] : []),
     ];
-    const safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent || "");
+    const ua = navigator.userAgent || "";
+    // iOS: any browser app (Safari, Opera, Chrome, Firefox on iOS) is really
+    // Safari/WebKit underneath — order candidates for it, don't UA-sniff.
+    const safari = /iPhone|iPod|iPad/.test(ua) || /^((?!chrome|android).)*safari/i.test(ua);
     const cands = [];
     all.forEach((s, k) => {
       const isLocal = s.url.startsWith("/");
