@@ -123,6 +123,9 @@ export default function GuidePage() {
         hls.attachMedia(el);
       } else {
         el.onerror = () => { if (settled) return; cleanup(); idx += 1; tryCand(); };
+        // Rewind/loop channels end their playlist and stop — loop them
+        // seamlessly instead of leaving a paused picture.
+        el.onended = () => { try { el.currentTime = 0; el.play().catch(() => {}); } catch {} };
         el.src = cand.url;
         el.play().catch(() => {});
       }

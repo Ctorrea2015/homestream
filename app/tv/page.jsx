@@ -292,11 +292,14 @@ export default function TvPage() {
           advance();
         };
         // A live stream that reaches its end (provider cut the pipe, or a
-        // playlist with #EXT-X-ENDLIST) auto-pauses. Reconnect at the live
-        // edge instead of leaving a paused screen.
+        // playlist with #EXT-X-ENDLIST) auto-pauses. First try looping in
+        // place (rewind/loop channels land here), then a true reconnect.
         el.onended = () => {
           if (!antiFreeze || nativeReconnects >= 3) return;
           nativeReconnects += 1;
+          if (nativeReconnects <= 3) {
+            try { el.currentTime = 0; el.play().catch(() => {}); return; } catch {}
+          }
           setStatus("🧊 Stream ended — reconnecting at live edge…");
           try { el.load(); el.play().catch(() => {}); } catch {}
         };
