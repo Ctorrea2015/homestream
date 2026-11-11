@@ -130,6 +130,14 @@ function buildArgs(target, encoder, mode, dir, keepAll, seek) {
   args.push("-c:a", "aac", "-b:a", "160k", "-ac", "2");
 
   if (mode === "hls") {
+    // temp_file: write segments under a .tmp name and rename only when
+    // complete. Without it the playlist references a segment WHILE it is
+    // still being written — a player that fetches mid-write gets truncated
+    // data and Safari skips ahead to resync (random few-second scene skips).
+    // Windows denies the rename-into-place (killed every session there), so
+    // it stays Windows-only-disabled; the Pi is Linux and gets it.
+    const isWindows = process.platform === "win32";
+    const tempFlag = isWindows ? "" : "+temp_file";
     // keepAll (torrents/movies): store every segment for the whole file so
     // the player can rewind to the beginning — like a normal video. At 480p
     // /2.5 Mbps that's ~1.1 GB per hour of movie, deleted when the session
@@ -138,11 +146,9 @@ function buildArgs(target, encoder, mode, dir, keepAll, seek) {
       "-f", "hls",
       "-hls_time", "3",
       ...(keepAll
-        ? ["-hls_playlist_type", "event", "-hls_list_size", "0", "-hls_flags", "independent_segments"]
+        ? ["-hls_playlist_type", "event", "-hls_list_size", "0", "-hls_flags", `independent_segments${tempFlag}`]
         : ["-hls_list_size", "8",
-           // NB: no "temp_file" — its rename-into-place is denied on Windows
-           // (segment .tmp opens fail) and killed every HLS session mid-movie.
-           "-hls_flags", "delete_segments+independent_segments"]),
+           "-hls_flags", `delete_segments+independent_segments${tempFlag}`]),
       "-hls_segment_filename", `${dir}/s%05d.ts`,
       `${dir}/index.m3u8`,
     );
