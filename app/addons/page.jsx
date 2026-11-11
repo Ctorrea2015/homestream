@@ -10,27 +10,47 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const DEMO_NOTE = "Tip: e.g. https://v3-cinemeta.strem.io/manifest.json (official movie/show catalogs)";
 
 /** VLC/Infuse hand-off. In an installed standalone PWA, iOS blocks custom
- * scheme links — so a Copy button is provided as the reliable path: paste
- * into VLC's "Network Stream". */
+ * scheme links — and navigator.clipboard is unavailable on plain HTTP.
+ * So: show the link as selectable text (long-press → Copy) plus an
+ * execCommand fallback that still works on http. */
 function ExternalButtons({ url }) {
   const [copied, setCopied] = useState(false);
+  const [showLink, setShowLink] = useState(false);
+  function copyFallback() {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopied(ok);
+      if (ok) setTimeout(() => setCopied(false), 2500);
+      else setShowLink(true);
+    } catch {
+      setShowLink(true);
+    }
+  }
   return (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
-      <a className="btn ghost" href={`vlc://x-callback-url/stream?url=${encodeURIComponent(url)}`}>▶ Open in VLC</a>
-      <a className="btn ghost" href={`infuse://x-callback-url/play?url=${encodeURIComponent(url)}`}>▶ Open in Infuse</a>
-      <button
-        className="btn ghost"
-        onClick={() => {
-          try { navigator.clipboard.writeText(url); } catch {}
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2500);
-        }}
-      >
-        {copied ? "✓ Copied" : "⧉ Copy stream link"}
-      </button>
-      <span style={{ fontSize: 11, color: "var(--muted)" }}>
-        if the app buttons do nothing (installed app), open VLC → Network Stream → paste
-      </span>
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <a className="btn ghost" href={`vlc://x-callback-url/stream?url=${encodeURIComponent(url)}`}>▶ Open in VLC</a>
+        <a className="btn ghost" href={`infuse://x-callback-url/play?url=${encodeURIComponent(url)}`}>▶ Open in Infuse</a>
+        <button className="btn ghost" onClick={copyFallback}>{copied ? "✓ Copied" : "⧉ Copy stream link"}</button>
+      </div>
+      {showLink && (
+        <input
+          readOnly
+          value={url}
+          onFocus={(e) => e.target.select()}
+          style={{ width: "100%", marginTop: 8, fontSize: 12, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border, #333)", background: "transparent", color: "var(--text, inherit)" }}
+        />
+      )}
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+        VLC → Network → Network Stream → paste this link
+      </div>
     </div>
   );
 }
