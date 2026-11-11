@@ -627,7 +627,7 @@ export default function TvPage() {
         {playing && (
           <>
             <div className="playerBox" style={{ position: "relative" }}>
-              <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
+              <video x-webkit-airplay="allow" ref={videoRef} controls autoPlay playsInline />
               <PipButton videoRef={videoRef} style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }} />
             </div>
             <h1 className="wtitle">

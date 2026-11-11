@@ -198,7 +198,7 @@ function Player({ url, sources, title, poster, back }) {
 
   return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
-      <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
+      <video x-webkit-airplay="allow" ref={videoRef} controls autoPlay playsInline />
       <PipButton videoRef={videoRef} style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }} />
       {duration ? (
         <div style={{ padding: "6px 2px 0" }} onClick={(e) => e.stopPropagation()}>
