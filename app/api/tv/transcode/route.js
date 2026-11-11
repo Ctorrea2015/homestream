@@ -231,9 +231,10 @@ export async function GET(request) {
     if (!s || !s.child || s.child.exitCode !== null || s.child.killed) {
       const encoder = await pickEncoder();
       const feed = localProxyTarget(abs, request.headers.get("host"));
-      // Torrent/movie sources get a full-history playlist (rewind works);
-      // live TV keeps the rolling window.
-      const keepAll = /\/api\/torrent\/stream/.test(feed);
+      // Movie/show sources get a full-history playlist (rewind works);
+      // live TV keeps the rolling window. vod=1 is set by the movie players;
+      // torrent-stream URLs are auto-detected as a safety net.
+      const keepAll = sp.get("vod") === "1" || /\/api\/torrent\/stream/.test(feed);
       const child = spawn(ffmpeg, buildArgs(feed, encoder, "hls", dir, keepAll, seek), { windowsHide: true });
       s = { dir, child, last: Date.now() };
       hlsSessions.set(id, s);

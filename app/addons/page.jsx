@@ -110,7 +110,7 @@ function Player({ url, sources, title, poster, back }) {
       const shared = s.label ? ` ${s.label}` : "";
       if (isLocal) {
         const seekQ = seekBase > 0 ? `&seek=${Math.floor(seekBase)}` : "";
-        const convert = { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls${seekQ}`, hls: true, label: s.forceConvert ? `⏩ Skipping to ${fmtTime(seekBase)} — engine grabbing that part…` : `⚙️ Converting on the server (browser-safe)${shared} — starting…` };
+        const convert = { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls&vod=1${seekQ}`, hls: true, label: s.forceConvert ? `⏩ Skipping to ${fmtTime(seekBase)} — engine grabbing that part…` : `⚙️ Converting on the server (browser-safe)${shared} — starting…` };
         const direct = { url: s.url, hls: /\.m3u8/i.test(s.url), label: "" };
         const pair = s.forceConvert ? [convert] : (safari ? [convert, direct] : [direct, convert]);
         for (const c of pair) {
@@ -118,7 +118,7 @@ function Player({ url, sources, title, poster, back }) {
         }
       } else {
         cands.push({ url: proxy(s.url), hls: /\.m3u8/i.test(s.url), src: k + 1, of: all.length, label: `Connecting${shared}…` });
-        cands.push({ url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls`, hls: true, src: k + 1, of: all.length, label: `⚙️ Converting${shared}…` });
+        cands.push({ url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls&vod=1`, hls: true, src: k + 1, of: all.length, label: `⚙️ Converting${shared}…` });
       }
     });
 

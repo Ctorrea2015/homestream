@@ -14,7 +14,7 @@ function buildVodCandidates(url) {
   const cands = [];
   const proxy = `/api/tv/play?u=${encodeURIComponent(url)}`;
   const transcode = `/api/tv/transcode?u=${encodeURIComponent(url)}`;
-  const restream = `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`;
+  const restream = `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls&vod=1`;
 
   // iOS can only ever play an HLS stream (or a plain mp4). For mkv/avi the raw
   // hop is a guaranteed failure that just delays the real candidate — skip it
