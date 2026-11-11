@@ -92,6 +92,12 @@ function Player({ url, sources, title, poster, back }) {
     return cleanup;
   }, [url, sources]);
 
+  // Absolute URL of the currently-playing stream for external players
+  // (VLC/Infuse on the phone can play mkv/avi natively — no conversion).
+  const externalUrl = (typeof window !== "undefined" && url?.startsWith("/"))
+    ? `${window.location.origin}${url}`
+    : (url || "");
+
   return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
       <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
@@ -99,6 +105,12 @@ function Player({ url, sources, title, poster, back }) {
       <div style={{ padding: "8px 2px 0" }}>
         {status && <div className="notice" style={{ color: "var(--muted)" }}>{status}</div>}
         <h2 className="wtitle">{title}</h2>
+        {externalUrl && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            <a className="btn ghost" href={`vlc://x-callback-url/stream?url=${encodeURIComponent(externalUrl)}`}>▶ Open in VLC</a>
+            <a className="btn ghost" href={`infuse://x-callback-url/play?url=${encodeURIComponent(externalUrl)}`}>▶ Open in Infuse</a>
+          </div>
+        )}
         <button className="btn ghost" onClick={back}>← Back</button>
       </div>
     </div>
