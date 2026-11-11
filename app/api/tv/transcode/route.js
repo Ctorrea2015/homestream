@@ -94,7 +94,7 @@ function pickEncoder() {
  * a live HLS session (short segments + rolling playlist) that every native
  * player — iPhones above all — handles the way apps like UHF/TiviMate do.
  */
-function buildArgs(target, encoder, mode, dir) {
+function buildArgs(target, encoder, mode, dir, keepAll) {
   const args = [
     "-hide_banner", "-loglevel", "error",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
@@ -124,13 +124,19 @@ function buildArgs(target, encoder, mode, dir) {
   args.push("-c:a", "aac", "-b:a", "160k", "-ac", "2");
 
   if (mode === "hls") {
+    // keepAll (torrents/movies): store every segment for the whole file so
+    // the player can rewind to the beginning — like a normal video. At 480p
+    // /2.5 Mbps that's ~1.1 GB per hour of movie, deleted when the session
+    // goes idle. Live TV keeps the tiny rolling window instead.
     args.push(
       "-f", "hls",
       "-hls_time", "3",
-      "-hls_list_size", "8",
-      // NB: no "temp_file" — its rename-into-place is denied on Windows
-      // (segment .tmp opens fail) and killed every HLS session mid-movie.
-      "-hls_flags", "delete_segments+independent_segments",
+      ...(keepAll
+        ? ["-hls_list_size", "0", "-hls_flags", "independent_segments"]
+        : ["-hls_list_size", "8",
+           // NB: no "temp_file" — its rename-into-place is denied on Windows
+           // (segment .tmp opens fail) and killed every HLS session mid-movie.
+           "-hls_flags", "delete_segments+independent_segments"]),
       "-hls_segment_filename", `${dir}/s%05d.ts`,
       `${dir}/index.m3u8`,
     );
@@ -208,7 +214,10 @@ export async function GET(request) {
     if (!s || !s.child || s.child.exitCode !== null || s.child.killed) {
       const encoder = await pickEncoder();
       const feed = localProxyTarget(abs, request.headers.get("host"));
-      const child = spawn(ffmpeg, buildArgs(feed, encoder, "hls", dir), { windowsHide: true });
+      // Torrent/movie sources get a full-history playlist (rewind works);
+      // live TV keeps the rolling window.
+      const keepAll = /\/api\/torrent\/stream/.test(feed);
+      const child = spawn(ffmpeg, buildArgs(feed, encoder, "hls", dir, keepAll), { windowsHide: true });
       s = { dir, child, last: Date.now() };
       hlsSessions.set(id, s);
       child.stderr.on("data", (d) => {
