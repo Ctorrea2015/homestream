@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
-import { qbEnsureTorrent, qbReadRange } from "@/lib/qbittorrent";
+import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -35,6 +35,7 @@ export async function GET(request) {
   try {
     const q = await qbEnsureTorrent({ infoHash, nameHint });
     if (q) {
+      console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
       const ext = path.extname(q.name).toLowerCase();
       const headers = {
         "Content-Type": MIME[ext] || "application/octet-stream",
@@ -56,6 +57,7 @@ export async function GET(request) {
   }
 
   // ---- Engine 2: webtorrent ---------------------------------------------------
+  if (!(await qbAvailable())) console.log("[stream] qbittorrent not configured — using webtorrent engine");
   let t, pick;
   try {
     t = await getTorrent(infoHash);
