@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
+import { qbEnsureTorrent, qbReadRange } from "@/lib/qbittorrent";
+import path from "node:path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,15 +17,45 @@ const MIME = {
  * chunkable HTTP video (206 Range requests), exactly like Stremio's local
  * stream server. First play needs swarm peers, so it can take a while to
  * reach playable speed; browsers just see a normal byte stream.
+ *
+ * Engine order: qBittorrent (if configured in .data/qbittorrent.json) is the
+ * preferred engine — sequential downloading makes streaming fast. webtorrent
+ * (in-process) is the automatic fallback when qB isn't configured/working.
  */
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const infoHash = ((sp.get("infoHash")) || "").toLowerCase();
   const nameHint = sp.get("name") + " " + (sp.get("ep") || "").toUpperCase(); // "S01E02" helps pick the right file in season packs
+  const rangeHeader = request.headers.get("range");
   if (!/^[a-f0-9]{40}$/.test(infoHash)) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
   }
 
+  // ---- Engine 1: qBittorrent -------------------------------------------------
+  try {
+    const q = await qbEnsureTorrent({ infoHash, nameHint });
+    if (q) {
+      const ext = path.extname(q.name).toLowerCase();
+      const headers = {
+        "Content-Type": MIME[ext] || "application/octet-stream",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      };
+      const m = rangeHeader && /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+      let start = m && m[1] ? parseInt(m[1], 10) : 0;
+      let end = (m && m[2] ? parseInt(m[2], 10) : Math.max(q.size - 1, 0));
+      if (isNaN(start) || start > end) start = 0;
+      end = Math.min(end, q.size - 1);
+      headers["Content-Range"] = `bytes ${start}-${end}/${q.size}`;
+      headers["Content-Length"] = String(end - start + 1);
+      const node = qbReadRange(q.filePath, start, end);
+      return new Response(node, { status: 206, headers });
+    }
+  } catch (e) {
+    console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
+  }
+
+  // ---- Engine 2: webtorrent ---------------------------------------------------
   let t, pick;
   try {
     t = await getTorrent(infoHash);
@@ -61,7 +93,6 @@ export async function GET(request) {
     "Cache-Control": "no-store",
   };
 
-  const rangeHeader = request.headers.get("range");
   if (!rangeHeader) {
     headers["Content-Length"] = String(file.length);
     return new Response(file.stream(), { status: 200, headers });
