@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import dns from "node:dns";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -10,6 +11,26 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const HLS_ROOT = path.join(process.cwd(), ".data", "hls");
+
+/**
+ * Some ffmpeg builds (static npm copies, seen on Raspberry Pi OS) cannot do
+ * DNS at all — every lookup dies with "Failed to resolve hostname".
+ * Node resolves fine, so resolve the hostname here and hand ffmpeg a raw-IP
+ * URL plus an explicit Host header. ffmpeg never needs to resolve anything.
+ * Local targets (torrent engine, /api routes) are left untouched.
+ */
+async function resolveTarget(abs) {
+  try {
+    const u = new URL(abs);
+    if (/^(localhost|127\.|0\.0\.0\.0|\[::1\]|::1)/i.test(u.hostname)) return { url: abs, hostHeader: null };
+    const { address } = await dns.promises.lookup(u.hostname);
+    const hostHeader = u.host; // original host:port — sent verbatim
+    u.hostname = address;
+    return { url: u.href, hostHeader };
+  } catch {
+    return { url: abs, hostHeader: null };
+  }
+}
 
 /**
  * One ffmpeg child per URL at a time — when a new request comes for the same
@@ -81,17 +102,20 @@ function pickEncoder() {
  * a live HLS session (short segments + rolling playlist) that every native
  * player — iPhones above all — handles the way apps like UHF/TiviMate do.
  */
-function buildArgs(target, encoder, mode, dir) {
+function buildArgs(target, encoder, mode, dir, hostHeader) {
   const args = [
     "-hide_banner", "-loglevel", "error",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
     "-user_agent", "HomeStream/1.0 VLC/3.0",
+  ];
+  if (hostHeader) args.push("-headers", `Host: ${hostHeader}\r\n`);
+  args.push(
     "-i", target,
     "-map", "0:v:0",
     "-map", "0:a:0?",
     "-vf", "scale=-2:min(ih\\,720)",
     "-b:v", "2.5M", "-maxrate", "3M", "-bufsize", "5M",
-  ];
+  );
   if (encoder === "h264_qsv") {
     args.push("-c:v", "h264_qsv");
   } else if (encoder === "h264_nvenc") {
@@ -191,7 +215,8 @@ export async function GET(request) {
     let s = hlsSessions.get(id);
     if (!s || !s.child || s.child.exitCode !== null || s.child.killed) {
       const encoder = await pickEncoder();
-      const child = spawn(ffmpeg, buildArgs(abs, encoder, "hls", dir), { windowsHide: true });
+      const resolved = await resolveTarget(abs);
+      const child = spawn(ffmpeg, buildArgs(resolved.url, encoder, "hls", dir, resolved.hostHeader), { windowsHide: true });
       s = { dir, child, last: Date.now() };
       hlsSessions.set(id, s);
       child.stderr.on("data", (d) => {
@@ -216,7 +241,7 @@ export async function GET(request) {
       if (txt && txt.includes("#EXTINF")) break;
       if (s.child.exitCode !== null) {
         return NextResponse.json(
-          { error: "ffmpeg could not restream this channel — the source may be offline" },
+          { error: "ffmpeg could not restream this source — it may be offline" },
           { status: 502 },
         );
       }
@@ -242,7 +267,8 @@ export async function GET(request) {
   // viewers/devices (someone else's Live TV). Each prunes itself when idle.
 
   const encoder = await pickEncoder();
-  const child = spawn(ffmpeg, buildArgs(abs, encoder, "mp4"), { windowsHide: true });
+  const resolved = await resolveTarget(abs);
+  const child = spawn(ffmpeg, buildArgs(resolved.url, encoder, "mp4", null, resolved.hostHeader), { windowsHide: true });
   active.set(abs, child);
 
   let stderrTail = "";
