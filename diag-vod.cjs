@@ -36,6 +36,12 @@ function ffTest(ffmpeg, url, ua) {
   const url = `${s.host}/movie/${s.username}/${s.password}/${m.id}.${m.container}`;
   console.log("title:", m.title, "| container:", m.container);
 
+  // Part 0: which code is the repo actually on?
+  try {
+    const head = require("child_process").execSync("git rev-parse --short HEAD", { cwd: __dirname }).toString().trim();
+    console.log("repo HEAD:", head);
+  } catch { console.log("repo HEAD: unknown"); }
+
   // Part 1: through the app (same as before)
   const base = "http://localhost:3000";
   const t0 = Date.now();
@@ -64,6 +70,24 @@ function ffTest(ffmpeg, url, ua) {
       console.log(`${name} default user-agent: ${noUA.ok ? "READS FINE" : "FAILS"}`);
       if (!noUA.ok) console.log("   error:", noUA.err.slice(0, 250));
     }
+  }
+
+  // Part 4: replicate the app's EXACT method (76b5da1) — ffmpeg reads the
+  // provider file through our own /api/tv/play proxy on 127.0.0.1, so the
+  // binary needs zero DNS. If this works but the app 502s, the app is not
+  // running this code (stale build).
+  if (bundled) {
+    const feed = "http://127.0.0.1:3000/api/tv/play?u=" + encodeURIComponent(url);
+    const p = spawn(bundled, [
+      "-hide_banner", "-loglevel", "error",
+      "-i", feed, "-t", "5", "-f", "null", "-",
+    ], { timeout: 30000 });
+    let err = "";
+    p.stderr.on("data", (d) => (err += d.toString()));
+    const code = await new Promise((r) => { p.on("error", () => r(-1)); p.on("close", (c) => r(c)); });
+    const tail = err.split("\n").filter(Boolean).slice(-3).join(" | ");
+    console.log(`local-proxy test (127.0.0.1:3000): ${code === 0 ? "WORKS — the app should now work too" : "FAILS (exit " + code + ")"}`);
+    if (code !== 0) console.log("   error:", tail.slice(0, 250));
   }
   process.exit(0);
 })().catch((e) => { console.log("ERROR:", String(e).slice(0, 200)); process.exit(0); });
