@@ -61,10 +61,13 @@ function Player({ url, title, poster, back }) {
       }
       const cand = candidates[candidateIdx];
       setStatus(cand.label || "");
+      // Conversions on the Pi take a while before the first playable piece
+      // (loading + probing a multi-GB mkv). 15 s killed iPhones (which always
+      // convert) while PCs (direct native) never noticed. Give converts 60 s.
       watchdog = setTimeout(() => {
         if (settled || el.readyState >= 3) return;
         advance();
-      }, 15000);
+      }, /transcode/.test(cand.url) ? 60000 : 15000);
 
       if ((cand.engine === "hls" || cand.engine === "restream") && Hls.isSupported()) {
         hls = new Hls({ manifestLoadingTimeOut: 12000, fragLoadingTimeOut: 20000 });

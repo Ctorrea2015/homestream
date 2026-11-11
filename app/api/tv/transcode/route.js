@@ -186,9 +186,11 @@ export async function GET(request) {
       s.last = Date.now();
     }
 
-    // Wait until ffmpeg has emitted a real live playlist (first segment done).
+    // Wait until ffmpeg has emitted a real live playlist (first segment
+    // done). Big movie files on the Pi can take ~30 s before that first
+    // piece — 12 s was killing every iPhone playback of VOD/TV titles.
     const playlist = path.join(dir, "index.m3u8");
-    for (let waited = 0; waited < 12000; waited += 400) {
+    for (let waited = 0; waited < 30000; waited += 400) {
       const txt = await fs.readFile(playlist, "utf8").catch(() => null);
       if (txt && txt.includes("#EXTINF")) break;
       if (s.child.exitCode !== null) {
