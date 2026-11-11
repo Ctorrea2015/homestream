@@ -102,21 +102,24 @@ function buildArgs(target, encoder, mode, dir) {
     "-i", target,
     "-map", "0:v:0",
     "-map", "0:a:0?",
-    "-vf", "scale=-2:min(ih\\,720)",
     "-b:v", "2.5M", "-maxrate", "3M", "-bufsize", "5M",
   ];
   if (encoder === "h264_qsv") {
-    args.push("-c:v", "h264_qsv");
+    args.push("-vf", "scale=-2:min(ih\\,720)", "-c:v", "h264_qsv");
   } else if (encoder === "h264_nvenc") {
-    args.push("-c:v", "h264_nvenc", "-preset", "p1");
+    args.push("-vf", "scale=-2:min(ih\\,720)", "-c:v", "h264_nvenc", "-preset", "p1");
   } else if (encoder === "h264_amf") {
-    args.push("-c:v", "h264_amf", "-quality", "speed");
+    args.push("-vf", "scale=-2:min(ih\\,720)", "-c:v", "h264_amf", "-quality", "speed");
   } else if (encoder === "h264_v4l2m2m") {
     // Raspberry Pi video hardware encoder — the only way 1080p transcodes
     // stay watchable on a Pi's small CPU.
-    args.push("-c:v", "h264_v4l2m2m", "-b:v", "2.5M");
+    args.push("-vf", "scale=-2:min(ih\\,720)", "-c:v", "h264_v4l2m2m", "-b:v", "2.5M");
   } else {
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency");
+    // Software encode (the Pi's case — no usable H.264 encoder). 480p + the
+    // fastest preset keeps the CPU ahead of realtime so playback never
+    // freezes waiting for the next segment. Phone screens hide the
+    // difference; dropped frames do not.
+    args.push("-vf", "scale=-2:min(ih\\,480)", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency");
   }
   args.push("-c:a", "aac", "-b:a", "160k", "-ac", "2");
 
