@@ -56,7 +56,7 @@ function encoderWorks(ffmpeg, encoder) {
 function pickEncoder() {
   if (!encoderPromise) {
     encoderPromise = (async () => {
-      const { ffmpeg } = findFfmpeg();
+      const { ffmpeg } = await findFfmpeg();
       const candidates = ["h264_qsv", "h264_nvenc", "h264_amf", "h264_v4l2m2m"];
       return new Promise((resolve) => {
         const p = spawn(ffmpeg, ["-hide_banner", "-encoders"], { windowsHide: true });
@@ -175,7 +175,7 @@ export async function GET(request) {
     return NextResponse.json({ error: "Only http(s) streams are supported" }, { status: 400 });
   }
 
-  const { ffmpeg } = findFfmpeg();
+  const { ffmpeg } = await findFfmpeg();
   if (!ffmpeg) return NextResponse.json({ error: "ffmpeg is not installed next to the app" }, { status: 500 });
   startPrune();
 
@@ -196,9 +196,7 @@ export async function GET(request) {
       hlsSessions.set(id, s);
       child.stderr.on("data", (d) => {
         const tail = d.toString().slice(-300);
-        if (tail.includes("error") || tail.includes("Error") || tail.includes("failed")) {
-          console.error(`[hls ${id}] ffmpeg: ${tail}`.replace(/\n+/g, " | "));
-        }
+        if (tail.trim()) console.error(`[hls ${id}] ffmpeg: ${tail}`.replace(/\n+/g, " | "));
       });
       child.on("close", (code, sig) => {
         if (sig === "SIGKILL" || code === 0) return; // intentional stop / clean exit
