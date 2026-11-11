@@ -132,7 +132,7 @@ function buildArgs(target, encoder, mode, dir, keepAll) {
       "-f", "hls",
       "-hls_time", "3",
       ...(keepAll
-        ? ["-hls_list_size", "0", "-hls_flags", "independent_segments"]
+        ? ["-hls_playlist_type", "event", "-hls_list_size", "0", "-hls_flags", "independent_segments"]
         : ["-hls_list_size", "8",
            // NB: no "temp_file" — its rename-into-place is denied on Windows
            // (segment .tmp opens fail) and killed every HLS session mid-movie.
