@@ -38,6 +38,22 @@ export async function GET(request) {
   t._hsTouch = Date.now();
   const file = pick.file;
   prioritizePieces(t, file); // aim the swarm at this file's pieces
+  // External players (VLC/Infuse) give up fast when connected to a stream
+  // that sends headers but no data. If nothing has downloaded yet, hold the
+  // response until the first piece arrives so the player's connect timeout
+  // starts counting against real bytes, not silence.
+  if (!t.downloaded && !t.received) {
+    await new Promise((resolve) => {
+      const started = Date.now();
+      const check = setInterval(() => {
+        if (t.downloaded > 0 || t.received > 0 || Date.now() - started > 90_000) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 500);
+      t.once?.("ready", () => { clearInterval(check); resolve(); });
+    });
+  }
   const ext = pick.ext;
   const headers = {
     "Content-Type": MIME[ext] || "application/octet-stream",
