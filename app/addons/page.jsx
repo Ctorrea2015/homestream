@@ -9,6 +9,32 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const DEMO_NOTE = "Tip: e.g. https://v3-cinemeta.strem.io/manifest.json (official movie/show catalogs)";
 
+/** VLC/Infuse hand-off. In an installed standalone PWA, iOS blocks custom
+ * scheme links — so a Copy button is provided as the reliable path: paste
+ * into VLC's "Network Stream". */
+function ExternalButtons({ url }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
+      <a className="btn ghost" href={`vlc://x-callback-url/stream?url=${encodeURIComponent(url)}`}>▶ Open in VLC</a>
+      <a className="btn ghost" href={`infuse://x-callback-url/play?url=${encodeURIComponent(url)}`}>▶ Open in Infuse</a>
+      <button
+        className="btn ghost"
+        onClick={() => {
+          try { navigator.clipboard.writeText(url); } catch {}
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2500);
+        }}
+      >
+        {copied ? "✓ Copied" : "⧉ Copy stream link"}
+      </button>
+      <span style={{ fontSize: 11, color: "var(--muted)" }}>
+        if the app buttons do nothing (installed app), open VLC → Network Stream → paste
+      </span>
+    </div>
+  );
+}
+
 function Player({ url, sources, title, poster, back }) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState("Connecting…");
@@ -96,9 +122,7 @@ function Player({ url, sources, title, poster, back }) {
   // (VLC/Infuse on the phone can play mkv/avi natively — no conversion).
   const externalUrl = (typeof window !== "undefined" && url?.startsWith("/"))
     ? `${window.location.origin}${url}`
-    : (url || "");
-
-  return (
+    : (url || "");  return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
       <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
       <PipButton videoRef={videoRef} style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }} />
@@ -106,10 +130,7 @@ function Player({ url, sources, title, poster, back }) {
         {status && <div className="notice" style={{ color: "var(--muted)" }}>{status}</div>}
         <h2 className="wtitle">{title}</h2>
         {externalUrl && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-            <a className="btn ghost" href={`vlc://x-callback-url/stream?url=${encodeURIComponent(externalUrl)}`}>▶ Open in VLC</a>
-            <a className="btn ghost" href={`infuse://x-callback-url/play?url=${encodeURIComponent(externalUrl)}`}>▶ Open in Infuse</a>
-          </div>
+          <ExternalButtons url={externalUrl} />
         )}
         <button className="btn ghost" onClick={back}>← Back</button>
       </div>
