@@ -69,6 +69,7 @@ function Player({ url, sources, title, poster, back }) {
   // converted region restarts the session at that point.
   const [duration, setDuration] = useState(null);
   const [seekBase, setSeekBase] = useState(0);
+  const [session, setSession] = useState(0);
   const [tick, setTick] = useState(0);
   useWatchProgress(videoRef, url, { title, poster, type: "movie" });
   const proxy = (u) => `/api/tv/play?u=${encodeURIComponent(u)}`;
@@ -165,7 +166,7 @@ function Player({ url, sources, title, poster, back }) {
     }
     tryCand();
     return cleanup;
-  }, [url, sources, seekBase]);
+  }, [url, sources, seekBase, session]);
 
   // Absolute URL of the currently-playing stream for external players
   // (VLC/Infuse on the phone can play mkv/avi natively — no conversion).
@@ -183,10 +184,14 @@ function Player({ url, sources, title, poster, back }) {
     const rect = e.currentTarget.getBoundingClientRect();
     const target = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * duration;
     const el = videoRef.current;
-    if (el && target < seekableEnd - 2) {
+    // Native seek only inside what's converted AND ahead of our start offset;
+    // iOS WebKit silently refuses backward seeks on live-style playlists, so
+    // anything else restarts the converter at that point (fresh session).
+    if (el && target > seekBase + 5 && target < seekableEnd - 2) {
       el.currentTime = Math.max(0, target - seekBase);
     } else {
       setSeekBase(Math.floor(target));
+      setSession((s) => s + 1); // force a fresh player session even at offset 0
     }
   }
   const pct = duration ? Math.min(100, (pos / duration) * 100) : 0;
@@ -206,7 +211,7 @@ function Player({ url, sources, title, poster, back }) {
             <span>{fmtTime(pos)}</span>
             <span>{fmtTime(duration)}</span>
           </div>
-          <button className="btn ghost" style={{ marginTop: 4, fontSize: 12 }} onClick={() => setSeekBase(0)}>⏮ Restart from beginning</button>
+          <button className="btn ghost" style={{ marginTop: 4, fontSize: 12 }} onClick={() => { setSeekBase(0); setSession((s) => s + 1); setStatus("⏮ Restarting from the beginning…"); }}>⏮ Restart from beginning</button>
         </div>
       ) : null}
       <div style={{ padding: "8px 2px 0" }}>
