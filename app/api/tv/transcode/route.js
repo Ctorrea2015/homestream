@@ -94,16 +94,22 @@ function pickEncoder() {
  * a live HLS session (short segments + rolling playlist) that every native
  * player — iPhones above all — handles the way apps like UHF/TiviMate do.
  */
-function buildArgs(target, encoder, mode, dir, keepAll) {
+function buildArgs(target, encoder, mode, dir, keepAll, seek) {
   const args = [
     "-hide_banner", "-loglevel", "error",
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
     "-user_agent", "HomeStream/1.0 VLC/3.0",
+  ];
+  // Input seek BEFORE -i: the demuxer jumps straight to the offset (reading
+  // only the needed range through the proxy) instead of decoding everything
+  // up to it. This is what makes "tap anywhere on the timeline" possible.
+  if (seek > 0) args.push("-ss", String(Math.floor(seek)));
+  args.push(
     "-i", target,
     "-map", "0:v:0",
     "-map", "0:a:0?",
     "-b:v", "2.5M", "-maxrate", "3M", "-bufsize", "5M",
-  ];
+  );
   if (encoder === "h264_qsv") {
     args.push("-vf", "scale=-2:min(ih\\,720)", "-c:v", "h264_qsv");
   } else if (encoder === "h264_nvenc") {
@@ -203,8 +209,13 @@ export async function GET(request) {
 
   const mode = sp.get("f") === "hls" ? "hls" : "mp4";
 
+  // Movie-player seek: &seek=<seconds> starts conversion at that offset.
+  const seek = Math.max(0, parseFloat(sp.get("seek") || "0") || 0);
+
   if (mode === "hls") {
-    const id = crypto.createHash("sha1").update(abs).digest("hex").slice(0, 12);
+    // Include the seek offset in the session id — each start point is its
+    // own clean session (fresh playlist beginning at that offset).
+    const id = crypto.createHash("sha1").update(`${abs}@${seek}`).digest("hex").slice(0, 12);
     const dir = path.join(HLS_ROOT, id);
     await fs.mkdir(dir, { recursive: true });
     killStale(abs);
@@ -217,7 +228,7 @@ export async function GET(request) {
       // Torrent/movie sources get a full-history playlist (rewind works);
       // live TV keeps the rolling window.
       const keepAll = /\/api\/torrent\/stream/.test(feed);
-      const child = spawn(ffmpeg, buildArgs(feed, encoder, "hls", dir, keepAll), { windowsHide: true });
+      const child = spawn(ffmpeg, buildArgs(feed, encoder, "hls", dir, keepAll, seek), { windowsHide: true });
       s = { dir, child, last: Date.now() };
       hlsSessions.set(id, s);
       child.stderr.on("data", (d) => {

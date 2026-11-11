@@ -55,11 +55,40 @@ function ExternalButtons({ url }) {
   );
 }
 
+const fmtTime = (s) => {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(sec).padStart(2, "0")}`;
+};
+
 function Player({ url, sources, title, poster, back }) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState("Connecting…");
+  // Movie-player state: total duration (probed once) and the offset the
+  // converter is currently starting from. Tapping the timeline past the
+  // converted region restarts the session at that point.
+  const [duration, setDuration] = useState(null);
+  const [seekBase, setSeekBase] = useState(0);
+  const [tick, setTick] = useState(0);
   useWatchProgress(videoRef, url, { title, poster, type: "movie" });
   const proxy = (u) => `/api/tv/play?u=${encodeURIComponent(u)}`;
+
+  const isTorrent = url?.startsWith("/") && /\/api\/torrent\/stream/.test(url);
+  useEffect(() => { setDuration(null); setSeekBase(0); }, [url]);
+  useEffect(() => {
+    if (!isTorrent) return;
+    let dead = false;
+    fetch(`/api/tv/probe?u=${encodeURIComponent(url)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!dead && d?.duration) setDuration(d.duration); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [url, isTorrent]);
+  useEffect(() => {
+    if (!duration) return;
+    const t = setInterval(() => setTick((k) => k + 1), 1000);
+    return () => clearInterval(t);
+  }, [duration]);
 
   useEffect(() => {
     // Candidate chain: every playable stream (the picked source FIRST, then
@@ -79,11 +108,11 @@ function Player({ url, sources, title, poster, back }) {
       const isLocal = s.url.startsWith("/");
       const shared = s.label ? ` ${s.label}` : "";
       if (isLocal) {
-        const pair = [
-          { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls`, hls: true, label: `⚙️ Converting on the server (browser-safe)${shared} — starting…` },
-          { url: s.url, hls: /\.m3u8/i.test(s.url), label: "" },
-        ];
-        for (const c of (safari ? pair : pair.concat().reverse())) {
+        const seekQ = seekBase > 0 ? `&seek=${Math.floor(seekBase)}` : "";
+        const convert = { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls${seekQ}`, hls: true, label: s.forceConvert ? `⏩ Skipping to ${fmtTime(seekBase)} — engine grabbing that part…` : `⚙️ Converting on the server (browser-safe)${shared} — starting…` };
+        const direct = { url: s.url, hls: /\.m3u8/i.test(s.url), label: "" };
+        const pair = s.forceConvert ? [convert] : (safari ? [convert, direct] : [direct, convert]);
+        for (const c of pair) {
           cands.push({ ...c, src: k + 1, of: all.length, title: s.title || "" });
         }
       } else {
@@ -136,16 +165,50 @@ function Player({ url, sources, title, poster, back }) {
     }
     tryCand();
     return cleanup;
-  }, [url, sources]);
+  }, [url, sources, seekBase]);
 
   // Absolute URL of the currently-playing stream for external players
   // (VLC/Infuse on the phone can play mkv/avi natively — no conversion).
   const externalUrl = (typeof window !== "undefined" && url?.startsWith("/"))
     ? `${window.location.origin}${url}`
-    : (url || "");  return (
+    : (url || "");
+
+  // Movie timeline: shown once the duration is known. Tapping a point inside
+  // the already-converted region seeks natively (instant); beyond it, the
+  // converter restarts at that offset ("skip to").
+  const pos = seekBase + (videoRef.current?.currentTime || 0);
+  const seekableEnd = seekBase + (videoRef.current?.seekable?.length ? videoRef.current.seekable.end(videoRef.current.seekable.length - 1) : 0);
+  function onTimelineTap(e) {
+    if (!duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const target = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * duration;
+    const el = videoRef.current;
+    if (el && target < seekableEnd - 2) {
+      el.currentTime = Math.max(0, target - seekBase);
+    } else {
+      setSeekBase(Math.floor(target));
+    }
+  }
+  const pct = duration ? Math.min(100, (pos / duration) * 100) : 0;
+
+  return (
     <div className="playerBox" style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
       <video x-webkit-airplay="allow" disableRemotePlayback="false" ref={videoRef} controls autoPlay playsInline />
       <PipButton videoRef={videoRef} style={{ position: "absolute", top: 10, right: 10, zIndex: 5 }} />
+      {duration ? (
+        <div style={{ padding: "6px 2px 0" }} onClick={(e) => e.stopPropagation()}>
+          <div onClick={onTimelineTap} style={{ position: "relative", height: 14, cursor: "pointer" }} title="Tap to jump">
+            <div style={{ position: "absolute", top: 5, left: 0, right: 0, height: 4, borderRadius: 2, background: "var(--border, #333)" }} />
+            <div style={{ position: "absolute", top: 5, left: 0, width: `${pct}%`, height: 4, borderRadius: 2, background: "var(--accent, #7c6cff)" }} />
+            <div style={{ position: "absolute", top: 2, left: `calc(${pct}% - 5px)`, width: 10, height: 10, borderRadius: 5, background: "#fff" }} />
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+            <span>{fmtTime(pos)}</span>
+            <span>{fmtTime(duration)}</span>
+          </div>
+          <button className="btn ghost" style={{ marginTop: 4, fontSize: 12 }} onClick={() => setSeekBase(0)}>⏮ Restart from beginning</button>
+        </div>
+      ) : null}
       <div style={{ padding: "8px 2px 0" }}>
         {status && <div className="notice" style={{ color: "var(--muted)" }}>{status}</div>}
         <h2 className="wtitle">{title}</h2>
