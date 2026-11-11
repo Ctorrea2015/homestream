@@ -8,23 +8,32 @@ import { useWatchProgress } from "../components/watchProgress";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /** Playback chain for VOD files — movies/episodes are usually mp4/mkv. */
+const IS_IOS = typeof navigator !== "undefined" && /iPhone|iPod|iPad/.test(navigator.userAgent);
+
 function buildVodCandidates(url) {
   const cands = [];
   const proxy = `/api/tv/play?u=${encodeURIComponent(url)}`;
   const transcode = `/api/tv/transcode?u=${encodeURIComponent(url)}`;
   const restream = `/api/tv/transcode?u=${encodeURIComponent(url)}&f=hls`;
 
-  if (/\.mp4($|\?)/i.test(url) || /\.m3u8($|\?)/i.test(url)) {
-    cands.push({ url: proxy, engine: "native", label: "" });
-  } else if (/\.(mkv|avi|wmv|flv|mpeg|mpg)$/i.test(url)) {
+  // iOS can only ever play an HLS stream (or a plain mp4). For mkv/avi the raw
+  // hop is a guaranteed failure that just delays the real candidate — skip it
+  // and lead with the converter, which iPhone must always use anyway.
+  const mkvish = /\.(mkv|avi|wmv|flv|mpeg|mpg)$/i.test(url);
+  if (IS_IOS && mkvish) {
+    cands.push({ url: restream, engine: "restream", label: "Converting…" });
+    cands.push({ url: transcode, engine: "native", label: "Converting…" });
+  } else if (mkvish) {
     // Try the player first (Chrome copes with many mkv/avi), then convert.
     cands.push({ url: proxy, engine: "native", label: "" });
     cands.push({ url: transcode, engine: "native", label: "Converting…" });
+    cands.push({ url: restream, engine: "restream", label: "Converting…" });
+    cands.push({ url: transcode, engine: "native", label: "Converting…" });
   } else {
     cands.push({ url: proxy, engine: "native", label: "" });
+    cands.push({ url: restream, engine: "restream", label: "Converting…" });
+    cands.push({ url: transcode, engine: "native", label: "Converting…" });
   }
-  cands.push({ url: restream, engine: "restream", label: "Converting…" });
-  cands.push({ url: transcode, engine: "native", label: "Converting…" });
   return cands;
 }
 
