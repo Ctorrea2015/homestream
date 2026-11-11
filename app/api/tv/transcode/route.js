@@ -29,22 +29,45 @@ function killStale(url) {
  * encoders once and prefer, in order: Intel QuickSync (h264_qsv),
  * NVIDIA NVENC, AMD AMF, then CPU (libx264).
  */
+/**
+ * Hardware encode beats CPU encode 5:1 on ultrabook CPUs. Probe ffmpeg's
+ * encoders once and prefer, in order: Intel QuickSync (h264_qsv),
+ * NVIDIA NVENC, AMD AMF, Pi v4l2m2m, then CPU (libx264).
+ *
+ * A name in "-encoders" only means the build knows the encoder — not that
+ * the hardware exists. The Pi 5 dropped its H.264 encoder entirely, so
+ * h264_v4l2m2m is listed but every real encode dies in ~1 s. Each hardware
+ * candidate therefore has to pass a 0.3 s real test-encode before we use it.
+ */
 let encoderPromise = null;
+function encoderWorks(ffmpeg, encoder) {
+  return new Promise((resolve) => {
+    // 0.3 s synthetic clip; zero-copy encode to null. Fast (~200 ms) and
+    // proves the encoder can actually produce frames on this machine.
+    const p = spawn(ffmpeg, [
+      "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc=duration=0.3:size=320x240:rate=10",
+      "-c:v", encoder, "-f", "null", "-",
+    ], { windowsHide: true, timeout: 10000 });
+    p.on("error", () => resolve(false));
+    p.on("close", (code) => resolve(code === 0));
+  });
+}
 function pickEncoder() {
   if (!encoderPromise) {
     encoderPromise = (async () => {
       const { ffmpeg } = findFfmpeg();
+      const candidates = ["h264_qsv", "h264_nvenc", "h264_amf", "h264_v4l2m2m"];
       return new Promise((resolve) => {
         const p = spawn(ffmpeg, ["-hide_banner", "-encoders"], { windowsHide: true });
         let out = "";
         p.stdout.on("data", (c) => (out += c.toString()));
         p.on("error", () => resolve("libx264"));
-        p.on("close", () => {
-          if (/h264_qsv/.test(out)) resolve("h264_qsv");
-          else if (/h264_nvenc/.test(out)) resolve("h264_nvenc");
-          else if (/h264_amf/.test(out)) resolve("h264_amf");
-          else if (/h264_v4l2m2m/.test(out)) resolve("h264_v4l2m2m");
-          else resolve("libx264");
+        p.on("close", async () => {
+          for (const c of candidates) {
+            if (new RegExp(c).test(out) && (await encoderWorks(ffmpeg, c))) return resolve(c);
+          }
+          resolve("libx264");
         });
       });
     })().catch(() => "libx264");
