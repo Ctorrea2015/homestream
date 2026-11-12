@@ -74,6 +74,23 @@ function Player({ url, sources, title, poster, back }) {
   useWatchProgress(videoRef, url, { title, poster, type: "movie" });
   const proxy = (u) => `/api/tv/play?u=${encodeURIComponent(u)}`;
 
+  // Ephemeral torrents: when playback closes (Back, tab close, app swipe),
+  // tell the server to delete the torrent task + files via rqbit/qB. This
+  // keeps streamed movies from piling up on the Pi's disk (Stremio-cache
+  // behavior). sendBeacon survives page unload where fetch does not.
+  useEffect(() => {
+    if (!url?.startsWith("/") || !url.includes("/api/torrent/stream")) return;
+    const ih = new URL(url, window.location.origin).searchParams.get("infoHash");
+    if (!ih) return;
+    const cleanup = () => {
+      try {
+        navigator.sendBeacon(`/api/torrent/cleanup?infoHash=${ih}&engine=both`);
+      } catch {}
+    };
+    window.addEventListener("pagehide", cleanup);
+    return () => { window.removeEventListener("pagehide", cleanup); cleanup(); };
+  }, [url]);
+
   const isTorrent = url?.startsWith("/") && /\/api\/torrent\/stream/.test(url);
   useEffect(() => { setDuration(null); setSeekBase(0); }, [url]);
   useEffect(() => {
