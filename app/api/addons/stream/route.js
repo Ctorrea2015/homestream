@@ -46,11 +46,18 @@ export async function GET(request) {
         playable: true,
       });
     } else if (raw.infoHash && /^[a-f0-9]{40}$/i.test(raw.infoHash)) {
-      // torrent file — played by the server's own BitTorrent engine
+      // torrent file — played by the server's own BitTorrent engine.
+      // Capture the addon's tracker list ("tracker:..." entries in
+      // raw.sources) — Stremio injects 20+ so the engine hits them all
+      // at once instead of cold-crawling DHT.
+      const trackers = (raw.sources || [])
+        .filter((s) => typeof s === "string" && s.startsWith("tracker:"))
+        .map((s) => s.slice("tracker:".length));
+      const trQ = trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
       const name = raw.title || raw.name || "";
       streams.push({
         title: name,
-        url: `/api/torrent/stream?infoHash=${raw.infoHash.toLowerCase()}&name=${encodeURIComponent(name).slice(0, 300)}`,
+        url: `/api/torrent/stream?infoHash=${raw.infoHash.toLowerCase()}&name=${encodeURIComponent(name).slice(0, 300)}${trQ}`,
         quality: raw.name || (name || "").match(/\d{3,4}[pP]/)?.[0] || "",
         size: "",
         playable: true,

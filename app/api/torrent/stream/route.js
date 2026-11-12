@@ -34,7 +34,7 @@ export async function GET(request) {
 
   // ---- Engine 1: rqbit (librqbit) — the lightweight primary -------------------
   try {
-    const r = await rqEnsureTorrent({ infoHash, nameHint });
+    const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
     if (r) {
       console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
       // rqbit's /stream/{fileIdx} endpoint handles Range itself — proxy it.
@@ -46,8 +46,9 @@ export async function GET(request) {
   }
 
   // ---- Engine 2: qBittorrent (proven fallback) --------------------------------
+  const trackers = sp.getAll("tr");
   try {
-    const q = await qbEnsureTorrent({ infoHash, nameHint });
+    const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
     if (q) {
       console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
       const ext = path.extname(q.name).toLowerCase();
