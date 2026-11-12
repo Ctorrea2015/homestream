@@ -98,7 +98,10 @@ export default function TvPage() {
   const [status, setStatus] = useState("");
   const [autoSkip, setAutoSkip] = useState(true);
   const [antiLag, setAntiLag] = useState(true);
-  const [antiFreeze, setAntiFreeze] = useState(true);
+  // Default OFF: field evidence shows the recovery interventions (native
+  // load() restarts, hls recoverMediaError loops) break more sessions than
+  // they save on this stack. The toggle stays for manual experiments.
+  const [antiFreeze, setAntiFreeze] = useState(false);
   const [epgBusy, setEpgBusy] = useState(false);
   const [epgMsg, setEpgMsg] = useState(null);
   const [progress, setProgress] = useState(null);   // {now, next} for playing channel
