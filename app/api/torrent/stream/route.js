@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
 import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
+import { rqEnsureTorrent, rqAvailable } from "@/lib/rqbit";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -31,7 +32,21 @@ export async function GET(request) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
   }
 
-  // ---- Engine 1: qBittorrent -------------------------------------------------
+  // ---- Engine 1: rqbit (librqbit) --------------------------------------------
+  try {
+    const r = await rqEnsureTorrent({ infoHash, nameHint });
+    if (r) {
+      console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
+      const ext = path.extname(r.name).toLowerCase();
+      // rqbit's /stream/{fileIdx} endpoint handles Range itself — proxy it.
+      const proxied = `/api/tv/play?u=${encodeURIComponent(r.streamUrl)}`;
+      return NextResponse.redirect(new URL(proxied, request.url), 302);
+    }
+  } catch (e) {
+    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) — trying qBittorrent`);
+  }
+
+  // ---- Engine 2: qBittorrent -------------------------------------------------
   try {
     const q = await qbEnsureTorrent({ infoHash, nameHint });
     if (q) {
@@ -56,7 +71,7 @@ export async function GET(request) {
     console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
   }
 
-  // ---- Engine 2: webtorrent ---------------------------------------------------
+  // ---- Engine 3: webtorrent ---------------------------------------------------
   if (!(await qbAvailable())) console.log("[stream] qbittorrent not configured — using webtorrent engine");
   let t, pick;
   try {
