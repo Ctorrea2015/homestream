@@ -61,5 +61,6 @@ export async function POST(request) {
 
   // Best-effort: also clear the HLS session dir for this stream (converter
   // sessions self-prune after 10 idle minutes, but an immediate sweep is tidy).
+  console.log(`[cleanup] ${infoHash.slice(0, 10)}… engine=${engine} → ${JSON.stringify(results)}`);
   return NextResponse.json({ ok: true, results });
 }

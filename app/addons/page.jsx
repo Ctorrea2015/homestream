@@ -77,19 +77,26 @@ function Player({ url, sources, title, poster, back }) {
   // Ephemeral torrents: when playback closes (Back, tab close, app swipe),
   // tell the server to delete the torrent task + files via rqbit/qB. This
   // keeps streamed movies from piling up on the Pi's disk (Stremio-cache
-  // behavior). sendBeacon survives page unload where fetch does not.
+  // behavior). sendBeacon survives page unload where fetch does not — but
+  // iOS can drop beacons on in-app navigation, so the Back button ALSO
+  // fires an explicit fetch. Two triggers, one endpoint, idempotent.
+  const cleanupUrl = url?.startsWith("/") && url.includes("/api/torrent/stream")
+    ? (() => {
+        const ih = new URL(url, window.location.origin).searchParams.get("infoHash");
+        return ih ? `/api/torrent/cleanup?infoHash=${ih}&engine=both` : null;
+      })()
+    : null;
+  const fireCleanup = () => {
+    if (!cleanupUrl) return;
+    try { navigator.sendBeacon(cleanupUrl); } catch {}
+    try { fetch(cleanupUrl, { method: "POST", keepalive: true }).catch(() => {}); } catch {}
+  };
   useEffect(() => {
-    if (!url?.startsWith("/") || !url.includes("/api/torrent/stream")) return;
-    const ih = new URL(url, window.location.origin).searchParams.get("infoHash");
-    if (!ih) return;
-    const cleanup = () => {
-      try {
-        navigator.sendBeacon(`/api/torrent/cleanup?infoHash=${ih}&engine=both`);
-      } catch {}
-    };
+    if (!cleanupUrl) return;
+    const cleanup = () => fireCleanup();
     window.addEventListener("pagehide", cleanup);
     return () => { window.removeEventListener("pagehide", cleanup); cleanup(); };
-  }, [url]);
+  }, [cleanupUrl]);
 
   const isTorrent = url?.startsWith("/") && /\/api\/torrent\/stream/.test(url);
   useEffect(() => { setDuration(null); setSeekBase(0); }, [url]);
@@ -237,7 +244,7 @@ function Player({ url, sources, title, poster, back }) {
         {externalUrl && (
           <ExternalButtons url={externalUrl} />
         )}
-        <button className="btn ghost" onClick={back}>← Back</button>
+        <button className="btn ghost" onClick={() => { fireCleanup(); back(); }}>← Back</button>
       </div>
     </div>
   );
