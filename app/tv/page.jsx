@@ -370,15 +370,19 @@ export default function TvPage() {
       if (Math.abs(el2.currentTime - lastTime) < 0.1) {
         stallTicks += 1;
         console.log("[anti-freeze] stalled", stallTicks);
-        if (stallTicks >= 3) {
-          // 3 samples (~12s frozen) — this format is beyond repair
+        // Patience: a few seconds of buffering is NOT a freeze. Repair only
+        // after ~24s of a truly stuck playhead, and never restart a native
+        // stream more than twice (each load() tears down and reconnects,
+        // which users perceive as playback randomly stopping).
+        if (stallTicks >= 6) {
+          // 6 samples (~24s frozen) — this format is beyond repair
           clearTimeout(watchdogRef.current);
           cleanupAttempt();
           candidateIdx += 1;
           tryCandidate();
           return;
         }
-        if (!antiFreeze) return;
+        if (!antiFreeze || repairs >= 2) return;
         setStatus("🧊 Frozen — repairing stream…");
         repairs += 1;
         if (hls) {
