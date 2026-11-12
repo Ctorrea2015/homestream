@@ -33,6 +33,7 @@ export async function GET(request) {
   }
 
   // ---- Engine 1: rqbit (librqbit) — the lightweight primary -------------------
+  const trackers = sp.getAll("tr"); // addon-injected trackers (Stremio's trick)
   try {
     const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
     if (r) {
@@ -47,7 +48,6 @@ export async function GET(request) {
   }
 
   // ---- Engine 2: qBittorrent (proven fallback) --------------------------------
-  const trackers = sp.getAll("tr");
   try {
     const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
     if (q) {
