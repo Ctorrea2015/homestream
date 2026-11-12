@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { killTorrentSessions } from "@/lib/tvSessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +36,11 @@ export async function POST(request) {
   }
 
   const results = {};
+  // Order matters: kill the converter sessions FIRST. A still-running ffmpeg
+  // keeps re-adding the torrent (its range reads re-invoke the stream route),
+  // so deleting the torrent alone gets undone within seconds.
+  await killTorrentSessions(infoHash);
+  results.converter = "sessions killed";
   if (engine === "rqbit" || engine === "both") {
     try {
       const cfg = await fs.readFile(path.join(process.cwd(), ".data", "rqbit.json"), "utf8")

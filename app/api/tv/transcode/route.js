@@ -5,11 +5,18 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { findFfmpeg } from "@/lib/ffmpeg";
+import {
+  hlsSessions as sharedHlsSessions,
+  sessionIdFor,
+  registerTorrentSession,
+  startPrune,
+  HLS_ROOT,
+} from "@/lib/tvSessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const HLS_ROOT = path.join(process.cwd(), ".data", "hls");
+const hlsSessions = sharedHlsSessions; // shared registry (lib/tvSessions.js)
 
 /**
  * ffmpeg never talks to the internet directly: some ffmpeg builds (static npm
@@ -162,31 +169,15 @@ function buildArgs(target, encoder, mode, dir, keepAll, seek) {
   return args;
 }
 
-/** Live HLS sessions: id → { dir, child, last } — pruned when unused. */
-const hlsSessions = new Map();
+/** Live HLS sessions now live in lib/tvSessions.js (shared with cleanup). */
 
 function killHlsStale(id) {
-  for (const [oldId, s] of hlsSessions) {
+  for (const [oldId, s] of sharedHlsSessions) {
     if (oldId !== id && !s.child.killed) {
       try { s.child.kill("SIGKILL"); } catch {}
-      hlsSessions.delete(oldId);
+      sharedHlsSessions.delete(oldId);
     }
   }
-}
-
-let pruneTimer = null;
-function startPrune() {
-  if (pruneTimer) return;
-  pruneTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, s] of hlsSessions) {
-      if (now - s.last > 10 * 60 * 1000) {
-        try { s.child.kill("SIGKILL"); } catch {}
-        fs.rm(s.dir, { recursive: true, force: true }).catch(() => {});
-        hlsSessions.delete(id);
-      }
-    }
-  }, 60_000);
 }
 
 /**
@@ -221,11 +212,19 @@ export async function GET(request) {
   if (mode === "hls") {
     // Include the seek offset in the session id — each start point is its
     // own clean session (fresh playlist beginning at that offset).
-    const id = crypto.createHash("sha1").update(`${abs}@${seek}`).digest("hex").slice(0, 12);
+    const id = sessionIdFor(`${abs}@${seek}`);
     const dir = path.join(HLS_ROOT, id);
     await fs.mkdir(dir, { recursive: true });
     killStale(abs);
     killHlsStale(id);
+    // Torrent feeds: register so torrent cleanup can kill this converter
+    // when playback ends (otherwise the still-running ffmpeg keeps
+    // re-adding the torrent the cleanup just deleted).
+    try {
+      const feedUrl = new URL(localProxyTarget(abs, request.headers.get("host")));
+      const ih = feedUrl.searchParams.get("u")?.match(/infoHash=([a-f0-9]{40})/i)?.[1];
+      if (ih) registerTorrentSession(ih, id);
+    } catch {}
 
     let s = hlsSessions.get(id);
     if (!s || !s.child || s.child.exitCode !== null || s.child.killed) {
