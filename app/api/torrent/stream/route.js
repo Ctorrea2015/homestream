@@ -42,7 +42,8 @@ export async function GET(request) {
       return NextResponse.redirect(new URL(proxied, request.url), 302);
     }
   } catch (e) {
-    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) — trying qBittorrent`);
+    const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
+    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — trying qBittorrent`);
   }
 
   // ---- Engine 2: qBittorrent (proven fallback) --------------------------------
