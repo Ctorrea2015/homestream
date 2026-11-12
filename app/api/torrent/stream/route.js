@@ -32,21 +32,7 @@ export async function GET(request) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
   }
 
-  // ---- Engine 1: rqbit (librqbit) --------------------------------------------
-  try {
-    const r = await rqEnsureTorrent({ infoHash, nameHint });
-    if (r) {
-      console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
-      const ext = path.extname(r.name).toLowerCase();
-      // rqbit's /stream/{fileIdx} endpoint handles Range itself — proxy it.
-      const proxied = `/api/tv/play?u=${encodeURIComponent(r.streamUrl)}`;
-      return NextResponse.redirect(new URL(proxied, request.url), 302);
-    }
-  } catch (e) {
-    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) — trying qBittorrent`);
-  }
-
-  // ---- Engine 2: qBittorrent -------------------------------------------------
+  // ---- Engine 1: qBittorrent (proven primary; rqbit experimental) -------------
   try {
     const q = await qbEnsureTorrent({ infoHash, nameHint });
     if (q) {
@@ -68,7 +54,20 @@ export async function GET(request) {
       return new Response(node, { status: 206, headers });
     }
   } catch (e) {
-    console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
+    console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — trying rqbit`);
+  }
+
+  // ---- Engine 2: rqbit (librqbit) --------------------------------------------
+  try {
+    const r = await rqEnsureTorrent({ infoHash, nameHint });
+    if (r) {
+      console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
+      // rqbit's /stream/{fileIdx} endpoint handles Range itself — proxy it.
+      const proxied = `/api/tv/play?u=${encodeURIComponent(r.streamUrl)}`;
+      return NextResponse.redirect(new URL(proxied, request.url), 302);
+    }
+  } catch (e) {
+    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
   }
 
   // ---- Engine 3: webtorrent ---------------------------------------------------
