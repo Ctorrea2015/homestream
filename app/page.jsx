@@ -46,6 +46,15 @@ const CSS = `
 .nfRowTitle { font-size:19px; font-weight:800; margin:0 0 8px; padding:0 4%; }
 .nfScroll { display:flex; gap:8px; overflow-x:auto; padding:4px 4% 14px; scrollbar-width:none; }
 .nfScroll::-webkit-scrollbar { display:none; }
+.nfScrollWrap { position:relative; }
+.nfArrow { position:absolute; top:0; bottom:14px; width:38px; border:none; cursor:pointer;
+  background:rgba(20,20,20,.6); color:#fff; font-size:30px; line-height:1; z-index:5;
+  opacity:0; transition:opacity .2s; }
+.nfScrollWrap:hover .nfArrow { opacity:1; }
+.nfArrow:hover { background:rgba(20,20,20,.85); }
+.nfArrow.left { left:0; border-radius:0 6px 6px 0; }
+.nfArrow.right { right:0; border-radius:6px 0 0 6px; }
+@media (hover: none) { .nfArrow { opacity:.55; width:30px; font-size:24px; } }
 .nfCard { flex:0 0 auto; width:152px; background:none; border:none; cursor:pointer; text-align:left;
   color:#fff; padding:0; transition:transform .18s ease; position:relative; }
 .nfCard:hover { transform:scale(1.07); z-index:2; }
@@ -93,19 +102,35 @@ const noPoster = (label = "🎬") => (
   </div>
 );
 
+function Scroller({ children }) {
+  const ref = useRef(null);
+  const scroll = (dir) => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.85, behavior: "smooth" });
+  };
+  return (
+    <div className="nfScrollWrap">
+      <button className="nfArrow left" aria-label="Scroll left" onClick={() => scroll(-1)}>‹</button>
+      <div className="nfScroll" ref={ref}>{children}</div>
+      <button className="nfArrow right" aria-label="Scroll right" onClick={() => scroll(1)}>›</button>
+    </div>
+  );
+}
+
 function Row({ title, items, onPick, nameKey = "name" }) {
   if (!items?.length) return null;
   return (
     <section className="nfRow">
       <h3 className="nfRowTitle">{title}</h3>
-      <div className="nfScroll">
+      <Scroller>
         {items.map((m, i) => (
           <button className="nfCard" key={`${m.id}-${i}`} onClick={() => onPick(m)} title={m[nameKey] || m.title}>
             {m.poster ? <img src={m.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : noPoster()}
             <div className="nfCardName">{m[nameKey] || m.title}</div>
           </button>
         ))}
-      </div>
+      </Scroller>
     </section>
   );
 }
@@ -128,7 +153,7 @@ function CatalogRow({ addon, cat, onPick }) {
   return (
     <section className="nfRow">
       <h3 className="nfRowTitle">{addon.name} · {cat.name}</h3>
-      <div className="nfScroll">
+      <Scroller>
         {!metas
           ? Array.from({ length: 8 }).map((_, i) => <div className="nfCard" key={i}>{noPoster()}</div>)
           : metas.map((m) => (
@@ -137,7 +162,7 @@ function CatalogRow({ addon, cat, onPick }) {
                 <div className="nfCardName">{m.name}</div>
               </button>
             ))}
-      </div>
+      </Scroller>
     </section>
   );
 }
