@@ -151,7 +151,7 @@ const FALLBACK_GENRES = [
   "Sci-Fi & Fantasy", "Thriller", "War", "Western",
 ];
 
-const genreValue = (g) => (typeof g === "string" ? g.toLowerCase() : String(g.name || "").toLowerCase());
+const genreValue = (g) => (typeof g === "string" ? g : String(g.name || ""));
 const genreLabel = (g) => (typeof g === "string" ? g : g.name);
 
 /** One installed addon catalog as its own scrolling row. Self-fetching.
