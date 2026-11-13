@@ -86,6 +86,11 @@ const CSS = `
 .nfSeasons { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
 .nfSeasonBtn { background:#232323; border:1px solid #333; color:#fff; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; }
 .nfSeasonBtn.on { border-color:#e50914; font-weight:700; }
+.nfRowHead { display:flex; align-items:baseline; justify-content:space-between; padding:0 4%; }
+.nfRowHead h3 { padding:0; }
+.nfCatSel { background:#232323; border:1px solid #444; color:#fff; padding:5px 10px;
+  border-radius:6px; font-size:12.5px; cursor:pointer; outline:none; }
+.nfCatSel:hover { border-color:#888; }
 .nfLoading { color:#999; padding:30px 4%; font-size:14px; }
 @media (max-width: 760px) {
   .nfHeroInner h1 { font-size:28px; }
@@ -118,11 +123,14 @@ function Scroller({ children }) {
   );
 }
 
-function Row({ title, items, onPick, nameKey = "name" }) {
+function Row({ title, items, onPick, nameKey = "name", filter }) {
   if (!items?.length) return null;
   return (
     <section className="nfRow">
-      <h3 className="nfRowTitle">{title}</h3>
+      <div className="nfRowHead">
+        <h3 className="nfRowTitle">{title}</h3>
+        {filter}
+      </div>
       <Scroller>
         {items.map((m, i) => (
           <button className="nfCard" key={`${m.id}-${i}`} onClick={() => onPick(m)} title={m[nameKey] || m.title}>
@@ -174,6 +182,8 @@ export default function NetflixHome() {
   const [searchResults, setSearchResults] = useState(null); // null = off
   const [searching, setSearching] = useState(false);
   const [detail, setDetail] = useState(null);    // {kind:'addon'|'prov', meta}
+  const [movieCat, setMovieCat] = useState("All");
+  const [seriesCat, setSeriesCat] = useState("All");
   const [dInfo, setDInfo] = useState(null);     // {desc, streams, seasons, episodes, ...}
   const [playing, setPlaying] = useState(null); // {url, sources, title, poster}
   const [cwKey, setCwKey] = useState(0);
@@ -196,12 +206,24 @@ export default function NetflixHome() {
   );
 
   const provMovies = useMemo(
-    () => (vod?.movies || []).slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
-    [vod],
+    () => (vod?.movies || [])
+      .filter((x) => movieCat === "All" || x.category === movieCat)
+      .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
+    [vod, movieCat],
   );
   const provSeries = useMemo(
-    () => (vod?.series || []).slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
-    [vod],
+    () => (vod?.series || [])
+      .filter((x) => seriesCat === "All" || x.category === seriesCat)
+      .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
+    [vod, seriesCat],
+  );
+
+  const movieCats = useMemo(() => ["All", ...[...new Set((vod?.movies || []).map((x) => x.category).filter(Boolean))].sort()], [vod]);
+  const seriesCats = useMemo(() => ["All", ...[...new Set((vod?.series || []).map((x) => x.category).filter(Boolean))].sort()], [vod]);
+  const catSel = (value, setValue, cats) => (
+    <select className="nfCatSel" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Filter by category">
+      {cats.map((c) => <option key={c} value={c}>{c === "All" ? "All categories" : c}</option>)}
+    </select>
   );
 
   const hero = useMemo(() => provMovies.find((m) => m.poster) || provSeries.find((m) => m.poster) || null, [provMovies, provSeries]);
@@ -419,8 +441,8 @@ export default function NetflixHome() {
             {allCatalogs.slice(0, 6).map((c, i) => (
               <CatalogRow key={i} addon={c.addon} cat={{ type: c.type, id: c.id, name: c.name }} onPick={openItem} />
             ))}
-            <Row title="Movies" items={provMovies} onPick={openItem} nameKey="title" />
-            <Row title="TV Shows" items={provSeries} onPick={openItem} nameKey="title" />
+            <Row title="Movies" items={provMovies} onPick={openItem} nameKey="title" filter={catSel(movieCat, setMovieCat, movieCats)} />
+            <Row title="TV Shows" items={provSeries} onPick={openItem} nameKey="title" filter={catSel(seriesCat, setSeriesCat, seriesCats)} />
             {loading && <div className="nfLoading">Loading your library…</div>}
           </div>
         </>
