@@ -1,543 +1,535 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import StreamPlayer from "./components/StreamPlayer";
+import ContinueRow from "./components/ContinueRow";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-const EXT_COLORS = {
-  mp4: ["#3d2f8f", "#6d5cff"],
-  mkv: ["#123a5e", "#2d7ff9"],
-  avi: ["#4a2e13", "#e08a3c"],
-  webm: ["#0f4a3d", "#27c99a"],
-  mov: ["#4a1042", "#e0559f"],
-  default: ["#28304a", "#5bffb5"],
-};
+/**
+ * Netflix-style home for HomeStream ("Discover"):
+ *  - fixed top nav with a global search
+ *  - hero billboard
+ *  - horizontally scrolling poster rows: addon catalogs + provider VOD
+ *  - Stremio-style detail: merged sources (provider streams first, then
+ *    Torrentio torrent sources found by title→IMDb lookup)
+ *  - plays through the shared StreamPlayer (movie-style, ephemeral torrents)
+ */
 
-function infoFor(v) {
-  const pair = EXT_COLORS[v.ext] || EXT_COLORS.default;
-  const hue = (parseInt(v.id.slice(0, 4), 16) % 360) + "deg";
-  return { background: `linear-gradient(135deg, ${pair[0]}, ${pair[1]})`, filter: `hue-rotate(${hue})` };
+const CSS = `
+.nf { background:#141414; min-height:100vh; color:#fff; }
+.nfTop { position:sticky; top:0; z-index:30; display:flex; align-items:center; gap:18px;
+  padding:10px 4%; background:linear-gradient(180deg, rgba(0,0,0,.88), rgba(0,0,0,.55)); }
+.nfBrand { color:#e50914; font-weight:900; font-size:22px; letter-spacing:1px; text-decoration:none; }
+.nfNav { display:flex; gap:16px; flex-wrap:wrap; }
+.nfNav a { color:#ddd; font-size:13.5px; text-decoration:none; }
+.nfNav a:hover, .nfNav a.on { color:#fff; font-weight:700; }
+.nfSearch { margin-left:auto; }
+.nfSearch input { width:210px; background:rgba(0,0,0,.65); border:1px solid #555; color:#fff;
+  padding:7px 12px; border-radius:4px; font-size:13px; outline:none; }
+.nfSearch input:focus { border-color:#999; }
+.nfHero { position:relative; min-height:62vh; display:flex; align-items:flex-end; }
+.nfHeroBg { position:absolute; inset:0; background-size:cover; background-position:center 20%; }
+.nfHeroFade { position:absolute; inset:0;
+  background:linear-gradient(90deg, rgba(20,20,20,.96) 0%, rgba(20,20,20,.55) 45%, transparent 75%),
+             linear-gradient(0deg, #141414 2%, transparent 55%); }
+.nfHeroInner { position:relative; padding:0 4% 6vh; max-width:620px; }
+.nfHeroInner h1 { font-size:42px; font-weight:900; margin:0 0 6px; text-shadow:0 2px 8px rgba(0,0,0,.8); }
+.nfHeroMeta { color:#ddd; font-size:13.5px; margin-bottom:8px; }
+.nfHeroDesc { color:#e8e8e8; font-size:15px; line-height:1.5; margin-bottom:14px;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.nfBtn { display:inline-flex; align-items:center; gap:8px; border:none; cursor:pointer;
+  font-weight:700; font-size:15px; padding:10px 24px; border-radius:4px; margin-right:10px; }
+.nfBtn.play { background:#fff; color:#111; }
+.nfBtn.info { background:rgba(109,109,110,.7); color:#fff; }
+.nfBtn:hover { filter:brightness(1.15); }
+.nfRow { margin:10px 0 26px; }
+.nfRowTitle { font-size:19px; font-weight:800; margin:0 0 8px; padding:0 4%; }
+.nfScroll { display:flex; gap:8px; overflow-x:auto; padding:4px 4% 14px; scrollbar-width:none; }
+.nfScroll::-webkit-scrollbar { display:none; }
+.nfCard { flex:0 0 auto; width:152px; background:none; border:none; cursor:pointer; text-align:left;
+  color:#fff; padding:0; transition:transform .18s ease; position:relative; }
+.nfCard:hover { transform:scale(1.07); z-index:2; }
+.nfCard img { width:100%; aspect-ratio:2/3; object-fit:cover; border-radius:4px; background:#26262a; display:block; }
+.nfCardName { font-size:12px; color:#ccc; margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nfGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:12px; padding:4px 4% 30px; }
+.nfGrid .nfCard { width:auto; }
+.nfModal { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.8); overflow-y:auto; padding:24px 12px 60px; }
+.nfModalBox { max-width:840px; margin:0 auto; background:#181818; border-radius:10px; overflow:hidden;
+  box-shadow:0 20px 80px rgba(0,0,0,.9); }
+.nfModalHero { position:relative; height:380px; background-size:cover; background-position:center 20%; }
+.nfModalHeroFade { position:absolute; inset:0; background:linear-gradient(0deg, #181818 2%, transparent 60%); }
+.nfModalClose { position:absolute; top:12px; right:12px; background:rgba(20,20,20,.85); border:none;
+  color:#fff; width:34px; height:34px; border-radius:50%; font-size:16px; cursor:pointer; z-index:2; }
+.nfModalBody { padding:0 32px 30px; }
+.nfModalBody h2 { font-size:28px; font-weight:900; margin:0 0 6px; }
+.nfModalMeta { color:#bbb; font-size:13.5px; margin-bottom:10px; }
+.nfModalDesc { color:#ddd; font-size:14.5px; line-height:1.55; max-width:640px; }
+.nfSection { margin-top:20px; }
+.nfSection h3 { font-size:16px; font-weight:800; margin:0 0 8px; }
+.nfSrc { display:block; width:100%; text-align:left; background:#232323; border:1px solid #333;
+  color:#fff; padding:10px 14px; border-radius:6px; margin:7px 0; cursor:pointer; font-size:13.5px; }
+.nfSrc:hover { background:#303030; border-color:#555; }
+.nfEp { display:inline-block; background:#232323; border:1px solid #333; color:#fff;
+  padding:7px 12px; border-radius:6px; margin:4px 6px 4px 0; cursor:pointer; font-size:12.5px; }
+.nfEp:hover { background:#303030; }
+.nfEp.on { border-color:#e50914; font-weight:700; }
+.nfMuted { color:#999; font-size:13px; }
+.nfSeasons { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.nfSeasonBtn { background:#232323; border:1px solid #333; color:#fff; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; }
+.nfSeasonBtn.on { border-color:#e50914; font-weight:700; }
+.nfLoading { color:#999; padding:30px 4%; font-size:14px; }
+@media (max-width: 760px) {
+  .nfHeroInner h1 { font-size:28px; }
+  .nfModalHero { height:250px; }
+  .nfModalBody { padding:0 18px 24px; }
+  .nfNav { display:none; }
+  .nfSearch input { width:130px; }
 }
+`;
 
-function fmtSize(bytes) {
-  if (bytes > 1e9) return (bytes / 1e9).toFixed(1) + " GB";
-  return (bytes / 1e6).toFixed(0) + " MB";
-}
+const noPoster = (label = "🎬") => (
+  <div style={{ width: "100%", aspectRatio: "2/3", borderRadius: 4, background: "#26262a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>
+    {label}
+  </div>
+);
 
-/** Small label chip: file type, or S01E02 for episodes */
-function chipFor(v) {
-  return v.kind === "episode" && v.season != null ? `S${String(v.season).padStart(2, "0")}E${v.episode != null ? String(v.episode).padStart(2, "0") : "??"}` : v.ext;
-}
-
-function Poster({ v, glyph = "▶" }) {
-  // Real poster when TMDB matched; pretty gradient otherwise.
-  if (v?.meta?.poster) {
-    return (
-      <>
-        <img src={v.meta.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
-        <span className="ext">{chipFor(v)}</span>
-        <span className="play">▶</span>
-      </>
-    );
-  }
+function Row({ title, items, onPick, nameKey = "name" }) {
+  if (!items?.length) return null;
   return (
-    <>
-      <span className="glyph">{glyph}</span>
-      <span className="ext">{chipFor(v)}</span>
-      <span className="play">▶</span>
-    </>
+    <section className="nfRow">
+      <h3 className="nfRowTitle">{title}</h3>
+      <div className="nfScroll">
+        {items.map((m, i) => (
+          <button className="nfCard" key={`${m.id}-${i}`} onClick={() => onPick(m)} title={m[nameKey] || m.title}>
+            {m.poster ? <img src={m.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : noPoster()}
+            <div className="nfCardName">{m[nameKey] || m.title}</div>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
-function Card({ v, progress }) {
-  const pct = progress && v.size ? Math.min(100, Math.round((progress.pos / progress.dur) * 100)) : 0;
+/** One installed addon catalog as its own scrolling row. Self-fetching. */
+function CatalogRow({ addon, cat, onPick }) {
+  const [metas, setMetas] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/addons/catalog?a=${encodeURIComponent(addon.id)}&type=${cat.type}&cat=${encodeURIComponent(cat.id)}&page=1`);
+        const out = await res.json();
+        if (!dead) setMetas(res.ok ? out.metas.slice(0, 40) : []);
+      } catch { if (!dead) setMetas([]); }
+    })();
+    return () => { dead = true; };
+  }, [addon.id, cat.type, cat.id]);
+  if (metas && metas.length === 0) return null;
   return (
-    <Link className="card" href={`/watch?id=${v.id}`} style={v.meta?.poster ? { background: "var(--surface)" } : {}}>
-      <div className="poster" style={v.meta?.poster ? { background: "#171b25" } : infoFor(v)}>
-        <Poster v={v} />
+    <section className="nfRow">
+      <h3 className="nfRowTitle">{addon.name} · {cat.name}</h3>
+      <div className="nfScroll">
+        {!metas
+          ? Array.from({ length: 8 }).map((_, i) => <div className="nfCard" key={i}>{noPoster()}</div>)
+          : metas.map((m) => (
+              <button className="nfCard" key={m.id} onClick={() => onPick(m)} title={m.name}>
+                {m.poster ? <img src={m.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : noPoster()}
+                <div className="nfCardName">{m.name}</div>
+              </button>
+            ))}
       </div>
-      <div className="meta">
-        <div className="t">{v.meta?.poster && v.kind === "episode" ? `${v.show} · S${v.season}E${v.episode ?? "?"}` : v.name}</div>
-        <div className="s">
-          {v.meta?.year ? `${v.meta.year} · ` : ""}
-          {fmtSize(v.size)} · {v.ext.toUpperCase()}
-        </div>
-        {pct > 0 && <div className="prog"><i style={{ width: pct + "%" }} /></div>}
-      </div>
-    </Link>
+    </section>
   );
 }
 
-export default function HomePage() {
-  const [library, setLibrary] = useState(null);
+export default function NetflixHome() {
+  const [addons, setAddons] = useState(null);
+  const [vod, setVod] = useState(null);
   const [query, setQuery] = useState("");
-  const [folder, setFolder] = useState("");
-  const [scanning, setScanning] = useState(false);
-  const [message, setMessage] = useState(null); // { kind: 'ok'|'err'|'info', text }
-  const [lastWatched, setLastWatched] = useState({});
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [tmdbKey, setTmdbKey] = useState("");
-  const [openShow, setOpenShow] = useState(null); // show title whose episodes are listed
-  const [networkSetup, setNetworkSetup] = useState(false); // has network been configured?
-  const [lanIp, setLanIp] = useState(""); // saved LAN IP
-  const [lanIpTrim, setLanIpTrim] = useState(""); // trimmed LAN IP for UI
-
-  async function loadLibrary() {
-    try {
-      const res = await fetch("/api/library");
-      setLibrary(await res.json());
-    } catch {}
-  }
+  const [searchResults, setSearchResults] = useState(null); // null = off
+  const [searching, setSearching] = useState(false);
+  const [detail, setDetail] = useState(null);    // {kind:'addon'|'prov', meta}
+  const [dInfo, setDInfo] = useState(null);     // {desc, streams, seasons, episodes, ...}
+  const [playing, setPlaying] = useState(null); // {url, sources, title, poster}
+  const [cwKey, setCwKey] = useState(0);
+  const searchTimer = useRef(null);
 
   useEffect(() => {
-    loadLibrary();
-    fetch("/api/settings").then((r) => r.json()).then((d) => {
-      setTmdbKey(d.tmdbKey || "");
-      setNetworkSetup(d.networkSetup || false);
-      setLanIp(d.lanIp || "");
-      setLanIpTrim(d.lanIp?.trim() || "");
-    }).catch(() => {});
-  }, []);
-
-  // Light poll keeps the library fresh after the watch timer's scans.
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") loadLibrary();
-    }, 60000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Resume positions are stored in localStorage by the watch page.
-  useEffect(() => {
-    try {
-      setLastWatched(JSON.parse(localStorage.getItem("hs_progress") || "{}"));
-    } catch {}
-  }, [library]);
-
-  async function scan(e) {
-    if (e) e.preventDefault();
-    if (!folder.trim()) return;
-    setScanning(true);
-    setMessage({ kind: "info", text: "Scanning folder…" });
-    const res = await fetch("/api/library", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder }),
-    });
-    const data = await res.json();
-    setScanning(false);
-    if (!res.ok) {
-      setMessage({ kind: "err", text: data.error || "Scan failed" });
-      return;
-    }
-    const posterNote = data.enriched ? `, ${data.enriched} posters fetched` : "";
-    setMessage({ kind: "ok", text: `Added ${data.added} videos${posterNote} — ${data.total} in library.` });
-    setFolder("");
-    loadLibrary();
-  }
-
-  async function rescanAll() {
-    setScanning(true);
-    setMessage({ kind: "info", text: "Re-scanning all folders…" });
-    const res = await fetch("/api/library", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "refresh" }),
-    });
-    const data = await res.json();
-    setScanning(false);
-    if (!res.ok) setMessage({ kind: "err", text: data.error || "Rescan failed" });
-    else setMessage({ kind: "ok", text: `Library refreshed — ${data.videos} videos${data.enriched ? `, ${data.enriched} posters added` : ""}.` });
-    loadLibrary();
-  }
-
-  async function removeFolder(f) {
-    const res = await fetch("/api/library", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder: f }) });
-    if (res.ok) loadLibrary();
-  }
-
-  async function saveKey(e) {
-    e.preventDefault();
-    if (!tmdbKey.trim()) return;
-    const res = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tmdbKey }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setMessage({ kind: "err", text: data.error || "Couldn't save the key" });
-      return;
-    }
-    setMessage({ kind: "ok", text: "TMDB key saved — filling in posters and descriptions in the background…" });
-    loadLibrary();
-    setTimeout(rescanAll, 1200);
-  }
-
-  async function setupNetwork(e) {
-    e.preventDefault();
-    const ip = lanIpTrim.trim();
-    if (!ip) {
-      setMessage({ kind: "err", text: "Enter a LAN IP address first" });
-      return;
-    }
-    setScanning(true);
-    setMessage({ kind: "info", text: "Saving network configuration…" });
-    const res = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "setup-network", ip }),
-    });
-    const data = await res.json();
-    setScanning(false);
-    if (!res.ok) {
-      setMessage({ kind: "err", text: data.error || "Failed to save network" });
-      return;
-    }
-    setNetworkSetup(true);
-    setLanIp(data.lanIp || ip);
-    setLanIpTrim(data.lanIp?.trim() || ip);
-    setMessage({ kind: "ok", text: `Network saved — ${lanIpTrim} configured. Devices on this Wi-Fi can now open the app.` });
-  }
-
-  async function clearNetwork() {
-    fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "clear-network" }) })
-      .then(() => {
-        setNetworkSetup(false);
-        setLanIp("");
-        setLanIpTrim("");
-        window.location.reload();
+    fetch("/api/addons").then((r) => r.json()).then((d) => setAddons(d.addons || [])).catch(() => setAddons([]));
+    fetch("/api/vod")
+      .then((r) => r.json())
+      .then((d) => {
+        setVod(d);
+        if (!d.movies?.length && !d.series?.length) return fetch("/api/vod?refresh=1").then((r) => r.json()).then(setVod).catch(() => {});
       })
-      .catch(() => window.location.reload());
-  }
+      .catch(() => setVod({ movies: [], series: [] }));
+  }, []);
 
-  const videos = useMemo(() => {
-    if (!library) return [];
-    const q = query.trim().toLowerCase();
-    return library.videos.filter((v) => !q || v.name.toLowerCase().includes(q));
-  }, [library, query]);
-
-  // TV shows collected from episode files, jellyfin-style.
-  const shows = useMemo(() => {
-    const map = new Map();
-    for (const v of library?.videos || []) {
-      if (v.kind !== "episode" || !v.show) continue;
-      let s = map.get(v.show);
-      if (!s) {
-        s = { title: v.show, episodes: [], poster: null };
-        map.set(v.show, s);
-      }
-      s.episodes.push(v);
-      if (v.meta?.poster && !s.poster) s.poster = v.meta.poster;
-    }
-    return [...map.values()]
-      .map((s) => ({
-        ...s,
-        episodes: s.episodes.sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || a.name.localeCompare(b.name)),
-      }))
-      .sort((a, b) => a.title.localeCompare(b.title));
-  }, [library]);
-
-  const movies = useMemo(() => videos.filter((v) => v.kind !== "episode"), [videos]);
-
-  const continueRow = useMemo(
-    () => videos.filter((v) => lastWatched[v.id] && lastWatched[v.id].pos > 15).slice(0, 8),
-    [videos, lastWatched]
+  const allCatalogs = useMemo(
+    () => (addons || []).flatMap((a) => (a.catalogs || []).map((c) => ({ addon: a, type: c.type || a.types?.[0] || "movie", id: c.id || "top", name: c.name || c.id || "Catalog" }))),
+    [addons],
   );
 
-  const searching = query.trim().length > 0;
+  const provMovies = useMemo(
+    () => (vod?.movies || []).slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
+    [vod],
+  );
+  const provSeries = useMemo(
+    () => (vod?.series || []).slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 40),
+    [vod],
+  );
 
-  if (!library) {
-    return (
-      <div className="shell">
-        <div className="main" style={{ paddingTop: 40, color: "var(--muted)" }}>Loading library…</div>
-      </div>
-    );
+  const hero = useMemo(() => provMovies.find((m) => m.poster) || provSeries.find((m) => m.poster) || null, [provMovies, provSeries]);
+
+  // Global search: addons (IMDb-backed) + your provider catalog, merged.
+  useEffect(() => {
+    clearTimeout(searchTimer.current);
+    const q = query.trim();
+    if (!q) { setSearchResults(null); setSearching(false); return; }
+    setSearching(true);
+    searchTimer.current = setTimeout(async () => {
+      let addonHits = [];
+      try {
+        const res = await fetch(`/api/addons/search?q=${encodeURIComponent(q)}`);
+        if (res.ok) addonHits = (await res.json()).metas || [];
+      } catch {}
+      const needle = q.toLowerCase();
+      const provHits = [
+        ...(vod?.movies || []), ...(vod?.series || []),
+      ].filter((x) => x.title?.toLowerCase().includes(needle))
+        .map((x) => ({ ...x, kind: x.category && x.episodeCount !== undefined ? "series" : (x.episodes !== undefined ? "series" : (x.category && x.season ? "series" : "movie")), name: x.title }));
+      // merge, dedupe by normalized name
+      const seen = new Set();
+      const merged = [];
+      for (const m of [...addonHits, ...provHits]) {
+        const k = (m.name || m.title || "").toLowerCase().replace(/\W+/g, " ");
+        if (k && !seen.has(k)) { seen.add(k); merged.push(m); }
+      }
+      setSearchResults(merged);
+      setSearching(false);
+    }, 450);
+    return () => clearTimeout(searchTimer.current);
+  }, [query, vod]);
+
+  // ---- detail opening -------------------------------------------------------
+  function openAddonDetail(m) {
+    const type = m.type || (String(m.id).startsWith("tt") ? "movie" : "movie");
+    setDetail({ kind: "addon", meta: { ...m, type } });
+    setDInfo({ loading: true, streams: null, episodes: null, desc: m.description || "" });
+    openAddonBody(m, type);
   }
 
-  return (
-    <div className={`shell${menuOpen ? " nav-open" : ""}`}>
-      {menuOpen && <div className="navOverlay" onClick={() => setMenuOpen(false)} />}
-      <aside className="side">
-        <div className="brand">Home<span>Stream</span></div>
-        <nav>
-          <a href="/">🎬 Library</a>
-          <a href="/tv">📺 Live TV</a>
-          <a href="/guide">🗓️ Guide</a>
-          <a href="/vod">🍿 Movies & TV</a>
-          <a href="/addons">🧩 Addons</a>
-          <a href="/" onClick={(e) => { e.preventDefault(); setMenuOpen(false); document.getElementById("add")?.scrollIntoView({ behavior: "smooth" }); }}>➕ Add videos</a>
-        </nav>
-        {library.lanUrl && (
-          <div className="notice" style={{ margin: "24px 0 0" }}>
-            📱 Phone on this Wi-Fi?<br />
-            <a href={library.lanUrl}>{library.lanUrl}</a>
-          </div>
-        )}
-        <div className="notice" style={{ margin: "16px 0 0", fontSize: 11.5, opacity: 0.75 }}>
-          🕒 Watch folders rescan every 10 min — new files appear automatically.
-        </div>
-      </aside>
+  async function openAddonBody(m, type) {
+    const [streams, meta] = await Promise.all([
+      loadStreamsAll(type, m.id),
+      (!m.description || type === "series")
+        ? fetch(`/api/addons/meta?a=com.linvo.cinemeta&type=${type}&id=${encodeURIComponent(m.id)}`).then((r) => r.json()).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    if (type === "series") {
+      const vids = (meta?.meta?.videos || []).filter((v) => v.season > 0);
+      setDInfo((d) => ({ ...d, loading: false, streams, episodes: vids, desc: meta?.meta?.description || d.desc }));
+    } else {
+      setDInfo((d) => ({ ...d, loading: false, streams, desc: meta?.meta?.description || d.desc }));
+    }
+  }
 
-      <main className="main">
-        <div className="head">
-          <button className="menuBtn" aria-label="Open menu" onClick={() => setMenuOpen(true)}>☰</button>
-          <h1>Library</h1>
+  async function loadStreamsAll(type, id) {
+    const usable = (addons || []).filter((a) => (a.types || []).includes(type) || (a.types || []).includes("all"));
+    const players = [];
+    for (const a of usable) {
+      try {
+        const res = await fetch(`/api/addons/stream?a=${encodeURIComponent(a.id)}&type=${type}&id=${encodeURIComponent(id)}`);
+        const out = await res.json();
+        if (res.ok) for (const s of out.streams || []) players.push({ ...s, addon: a.name });
+      } catch {}
+    }
+    return players;
+  }
+
+  // Stremio's trick for provider titles (no IMDb id): search Cinemeta by name,
+  // then ask the torrent addons for streams of the matched IMDb id.
+  async function torrentSourcesFor(title, type) {
+    try {
+      const res = await fetch(`/api/addons/search?q=${encodeURIComponent(title)}`);
+      const metas = res.ok ? (await res.json()).metas || [] : [];
+      const hit = metas.find((x) => /^tt\d+/.test(String(x.id)) && (!type || x.type === type))
+        || metas.find((x) => /^tt\d+/.test(String(x.id)));
+      if (!hit) return [];
+      return loadStreamsAll(hit.type || type || "movie", hit.id);
+    } catch { return []; }
+  }
+
+  function openProviderDetail(m) {
+    const isSeries = m.kind === "series" || m.episodes !== undefined || (m.category && !m.url);
+    if (!isSeries && m.url) {
+      // movie: straight to a Netflix-style detail with Play + torrent lookup
+      setDetail({ kind: "prov", meta: { ...m, type: "movie", name: m.title } });
+      setDInfo({ loading: true, streams: null, torrent: "pending", desc: "" });
+      torrentSourcesFor(m.title, "movie").then((t) => setDInfo((d) => ({ ...d, loading: false, torrent: t })));
+      return;
+    }
+    // series: fetch seasons/episodes with playable urls + torrent lookup
+    setDetail({ kind: "prov", meta: { ...m, type: "series", name: m.title } });
+    setDInfo({ loading: true, streams: null, torrent: "pending", seasons: null, season: null, desc: "" });
+    torrentSourcesFor(m.title, "series").then((t) => setDInfo((d) => ({ ...d, torrent: t })));
+    fetch(`/api/vod/series?prov=${encodeURIComponent(m.prov)}&id=${encodeURIComponent(m.id)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.error) { setDInfo((d) => ({ ...d, loading: false, seasons: [], error: j.error })); return; }
+        setDInfo((d) => ({
+          ...d, loading: false,
+          seasons: j.seasons || [],
+          season: (j.seasons || [])[0] || null,
+          desc: j.overview || "",
+          poster: j.poster || m.poster,
+        }));
+      })
+      .catch(() => setDInfo((d) => ({ ...d, loading: false, seasons: [], error: "Couldn't load this series" })));
+  }
+
+  function openItem(m) {
+    setPlaying(null);
+    if (m.prov) {
+      // provider items carry title, not name — normalize for the modal
+      openProviderDetail({ ...m, name: m.title });
+    } else {
+      openAddonDetail(m);
+    }
+  }
+
+  function pickAddonEpisode(v) {
+    const id = `${String(detail.meta.id).split(":")[0]}:${v.season}:${v.episode}`;
+    setDInfo((d) => ({ ...d, selEp: id, streams: null }));
+    loadStreamsAll("series", id).then((streams) => setDInfo((d) => ({ ...d, streams })));
+  }
+
+  function playAddon(s) {
+    setPlaying({
+      url: s.url,
+      sources: (dInfo?.streams || []).map((x) => ({ url: x.url, label: x.addon === s.addon ? "" : x.addon })),
+      title: detail.meta.name,
+      poster: detail.meta.poster || "",
+    });
+  }
+
+  function playProviderMovie(m) {
+    setPlaying({ url: m.url, sources: [], title: m.title, poster: m.poster || "" });
+  }
+
+  function playProviderEpisode(ep) {
+    setPlaying({
+      url: ep.url,
+      sources: [],
+      title: `${detail.meta.name} — S${String(ep.season).padStart(2, "0")}E${String(ep.episode).padStart(2, "0")}${ep.title ? ` · ${ep.title}` : ""}`,
+      poster: dInfo?.poster || detail.meta.poster || "",
+    });
+  }
+
+  function closeDetail() { setDetail(null); setDInfo(null); }
+
+  const showSearch = query.trim().length > 0;
+  const loading = !addons || !vod;
+
+  return (
+    <div className="nf">
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+
+      <header className="nfTop">
+        <Link className="nfBrand" href="/">HOMESTREAM</Link>
+        <nav className="nfNav">
+          <Link className="on" href="/">Home</Link>
+          <Link href="/library">Library</Link>
+          <Link href="/tv">Live TV</Link>
+          <Link href="/guide">Guide</Link>
+          <Link href="/addons">Addons</Link>
+        </nav>
+        <div className="nfSearch">
           <input
-            className="search"
-            placeholder={`Search ${library.videos.length} videos…`}
+            placeholder="🔍 Titles, shows, movies…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
+      </header>
 
-        {message && (
-          <div className="notice" style={message.kind === "err" ? { color: "#ff8f8f", borderColor: "#46242a" } : undefined}>
-            {message.text}
-          </div>
-        )}
+      {playing && (
+        <div style={{ padding: "12px 4% 30px" }}>
+          <StreamPlayer
+            url={playing.url}
+            sources={playing.sources}
+            title={playing.title}
+            poster={playing.poster || ""}
+            back={() => { setPlaying(null); setCwKey((k) => k + 1); }}
+          />
+        </div>
+      )}
 
-        <section className="panel" id="add">
-          <h3>Add a video folder</h3>
-          <p>Point HomeStream at any folder (e.g. <code>D:\Movies</code> or <code>D:\Media\TV Shows</code>). Files are found in subfolders too, S01E01-style names are turned into TV shows.</p>
-          <form className="row" onSubmit={scan}>
-            <input
-              className="input"
-              placeholder="D:\Movies"
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              spellCheck={false}
-            />
-            <button
-              className="btn"
-              type="button"
-              style={{ marginLeft: 8 }}
-              onClick={async () => {
-                try {
-                  const dir = await window.showDirectoryPicker();
-                  const path = Array.from(dir.entries())[0][0];
-                  setFolder(path);
-                } catch {
-                  setMessage({
-                    kind: "info",
-                    text:
-                      "Directory picker not supported on this device. Type the folder path manually (e.g. D:\\Movies).",
-                  });
-                }
-              }}
-              disabled={scanning || folder.trim().length > 0}
-              aria-label="Browse folder"
-            >
-              Browse
-            </button>
-            <button className="btn" type="submit" disabled={scanning || !folder.trim()}>
-              {scanning ? "Scanning…" : "Scan folder"}
-            </button>
-            <button className="btn ghost" type="button" disabled={scanning || library.folders.length === 0} onClick={rescanAll}>
-              🔄 Rescan all
-            </button>
-          </form>
-          {library.folders.length > 0 && (
-            <div>
-              {library.folders.map((f) => (
-                <span className="tag" key={f}>
-                  📁 {f}
-                  <button title="Remove from library" onClick={() => removeFolder(f)}>✕</button>
-                </span>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* TMDB metadata settings */}
-        <section className="panel">
-          <h3>🎬 Posters & descriptions (TMDB)</h3>
-          <p>
-            Paste a free TMDB API key to turn filenames into real posters, years and descriptions.
-            Get one in 2 minutes: <a href="https://www.themoviedb.org/signup" target="_blank" rel="noreferrer">themoviedb.org/signup</a> → Settings → API → Request an API key → copy the <b>API Key (v3)</b>.
-          </p>
-          <form className="row" onSubmit={saveKey}>
-            <input
-              className="input"
-              placeholder="TMDB API key (v3)"
-              value={tmdbKey}
-              onChange={(e) => setTmdbKey(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            <button className="btn" type="submit" disabled={!tmdbKey.trim()}>Save key</button>
-          </form>
-        </section>
-
-        {/* Network setup flow */}
-        <section className="panel" style={{ marginTop: 12 }}>
-          <h3>📱 Network Setup</h3>
-          <p>
-            This app works on any device connected to the same Wi-Fi as your PC.
-            Run this once to save your network address for automatic future access.
-          </p>
-          {networkSetup ? (
-            <div>
-              <p style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-                ✅ Network configured — IP saved: <code>{lanIp ?? "unknown"}</code>
-              </p>
-              <p style={{ fontSize: 12, opacity: 0.8 }}>
-                Devices on this Wi-Fi can now open <code>http://{lanIp ?? "your-IP"}:3000</code>
-                automatically.{TmrState ? " (Tailscale also works from anywhere)" : ""}
-              </p>
-              <button
-                className="btn ghost"
-                style={{ width: "100%" }}
-                onClick={() => {
-                  // Clear network setup and reload
-                  fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "clear-network" }) })
-                    .then(() => window.location.reload())
-                    .catch(() => window.location.reload());
-                }}
-              >
-                🔄 Reset network setup
-              </button>
-            </div>
-          ) : (
-            <form className="row" onSubmit={setupNetwork}>
-              <input
-                className="input"
-                type="text"
-                placeholder="192.168.1.XX (your PC's LAN IP)"
-                value={lanIp || ""}
-                onChange={(e) => setLanIp(e.target.value)}
-                spellCheck={false}
-                autoFocus
-              />
-              <button
-                className="btn"
-                type="submit"
-                disabled={scanning || !lanIpTrim.trim()}
-              >
-                📡 Save Network
-              </button>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => {
-                  // Generate QR code and show it
-                  const url = lanIpTrim ? `http://${lanIpTrim}:3000` : "";
-                  if (!url) {
-                    setMessage({ kind: "err", text: "Enter a LAN IP first" });
-                    return;
-                  }
-                  // Generate QR code data URL (simple approach)
-                  const qrData = `http://${lanIpTrim}:3000`;
-                  const el = document.createElement("img");
-                  el.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
-                    qrData
-                  )}`;
-                  el.style.width = "200px";
-                  el.style.height = "200px";
-                  el.style.marginTop = "8px";
-                  setMessage({
-                    kind: "ok",
-                    text: "Scan QR code with your phone camera",
-                    qrCode: el.outerHTML,
-                  });
-                }}
-              >
-                📱 Show QR Code
-              </button>
-            </form>
-          )}
-        </section>
-
-        {continueRow.length > 0 && !searching && (
-          <section className="hrow">
-            <h2>▶ Continue watching</h2>
-            <div className="grid" style={{ marginTop: 12 }}>
-              {continueRow.map((v) => (
-                <div key={v.id} style={{ position: "relative" }}>
-                  <Card v={v} progress={lastWatched[v.id]} />
-                  <span
-                    role="button"
-                    aria-label="Remove from Continue Watching"
-                    onClick={() => {
-                      const raw = JSON.parse(localStorage.getItem("hs_progress") || "{}");
-                      delete raw[v.id];
-                      localStorage.setItem("hs_progress", JSON.stringify(raw));
-                      setLastWatched({ ...raw });
-                    }}
-                    style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,.6)", borderRadius: "50%", width: 22, height: 22, lineHeight: "22px", fontSize: 12, textAlign: "center", cursor: "pointer", zIndex: 2 }}
-                  >✕</span>
+      {!playing && !showSearch && (
+        <>
+          {hero && (
+            <div className="nfHero">
+              <div className="nfHeroBg" style={{ backgroundImage: `url(${hero.poster})` }} />
+              <div className="nfHeroFade" />
+              <div className="nfHeroInner">
+                <h1>{hero.title || hero.name}</h1>
+                <div className="nfHeroMeta">
+                  {hero.year ? `${hero.year}` : ""}{hero.rating ? ` · ⭐ ${Number(hero.rating).toFixed?.(1) || hero.rating}` : ""}
+                  {hero.category ? ` · ${hero.category}` : ""}
                 </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {shows.length > 0 && !searching && (
-          <section className="hrow" style={{ marginTop: continueRow.length ? 10 : 0 }}>
-            <h2 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 1 }}>TV Shows ({shows.length})</h2>
-            {openShow ? (
-              <div className="panel" style={{ marginTop: 10 }}>
-                <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-                  {openShow.poster
-                    ? <img src={openShow.poster} alt="" style={{ width: 140, borderRadius: 8 }} onError={(e) => (e.currentTarget.style.display = "none")} />
-                    : <div style={{ width: 140, borderRadius: 8, background: "#171b25", aspectRatio: "2/3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>📺</div>}
-                  <div style={{ flex: 1, minWidth: 240 }}>
-                    <button className="btn ghost" onClick={() => setOpenShow(null)}>← All shows</button>
-                    <h2 style={{ margin: "10px 0 8px" }}>{openShow.title}</h2>
-                    <div className="epList">
-                      {openShow.episodes.map((ep) => (
-                        <Link
-                          key={ep.id}
-                          className="ep"
-                          href={`/watch?id=${ep.id}`}
-                          onClick={() => setOpenShow(null)}
-                        >
-                          ▶ {ep.episode != null ? `${ep.season}×${String(ep.episode).padStart(2, "0")} — ` : ""}{ep.name}
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                {hero.description && <div className="nfHeroDesc">{hero.description}</div>}
+                <button className="nfBtn play" onClick={() => openItem(hero)}>▶ Play</button>
+                <button className="nfBtn info" onClick={() => openItem(hero)}>ⓘ More Info</button>
               </div>
-            ) : (
-              <div className="grid" style={{ marginTop: 12 }}>
-                {shows.map((s) => (
-                  <button className="card vodCard" key={s.title} onClick={() => setOpenShow(s)}>
-                    <div className="poster" style={{ background: "#171b25", aspectRatio: "2/3" }}>
-                      {s.poster
-                        ? <img src={s.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
-                        : <span className="glyph">📺</span>}
-                      <span className="ext">{s.episodes.length} ep</span>
-                    </div>
-                    <div className="meta">
-                      <div className="t">{s.title}</div>
-                      <div className="s">{s.episodes.length} episode{s.episodes.length === 1 ? "" : "s"}</div>
-                    </div>
-                  </button>
-                ))}
+            </div>
+          )}
+
+          <div style={{ marginTop: hero ? -8 : 12 }}>
+            <ContinueRow refreshKey={cwKey} onSelect={(x) => setPlaying({ url: x.id, title: x.title, poster: x.poster })} />
+            {(addons || []).length === 0 && (
+              <div className="nfLoading">
+                No addons installed yet — <Link href="/addons" style={{ color: "#e50914", fontWeight: 700 }}>install Cinemeta + Torrentio</Link> for full catalogs and torrent sources.
               </div>
             )}
-          </section>
-        )}
+            {allCatalogs.slice(0, 6).map((c, i) => (
+              <CatalogRow key={i} addon={c.addon} cat={{ type: c.type, id: c.id, name: c.name }} onPick={openItem} />
+            ))}
+            <Row title="Movies" items={provMovies} onPick={openItem} nameKey="title" />
+            <Row title="TV Shows" items={provSeries} onPick={openItem} nameKey="title" />
+            {loading && <div className="nfLoading">Loading your library…</div>}
+          </div>
+        </>
+      )}
 
-        <section className="hrow" style={{ marginTop: shows.length ? 10 : 0 }}>
-          <h2 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 1 }}>
-            {searching ? `Results for “${query}” (${videos.length})` : `Videos (${movies.length})`}
-          </h2>
-          {videos.length === 0 ? (
-            <div style={{ marginTop: 12 }}>
-              <div className="empty" style={{ maxWidth: 560, margin: "0 auto" }}>
-                {library.folders.length === 0
-                  ? "No folders yet — add one above to fill your library."
-                  : searching ? "Nothing matches that search." : "No video files found in your folders."}
+      {!playing && showSearch && (
+        <section style={{ marginTop: 14 }}>
+          <h3 className="nfRowTitle">{searching ? "Searching…" : `Results for “${query.trim()}”`}</h3>
+          {!searching && searchResults?.length === 0 && (
+            <div className="nfLoading">Nothing found across addons or your provider.</div>
+          )}
+          <div className="nfGrid">
+            {(searchResults || []).map((m, i) => (
+              <button className="nfCard" key={`${m.id}-${i}`} onClick={() => openItem(m)} title={m.name || m.title}>
+                {m.poster ? <img src={m.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : noPoster()}
+                <div className="nfCardName">{m.name || m.title}</div>
+                {(m.year || m.rating) && <div style={{ fontSize: 11, color: "#888" }}>{m.year || ""}{m.rating ? ` · ⭐ ${m.rating}` : ""}</div>}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {detail && !playing && (
+        <div className="nfModal" onClick={closeDetail}>
+          <div className="nfModalBox" onClick={(e) => e.stopPropagation()}>
+            <div className="nfModalHero" style={{ backgroundImage: `url(${dInfo?.poster || detail.meta.poster || ""})` }}>
+              <div className="nfModalHeroFade" />
+              <button className="nfModalClose" onClick={closeDetail} aria-label="Close">✕</button>
+              <div style={{ position: "absolute", left: 32, bottom: 18, right: 32 }}>
+                <h2 style={{ margin: 0, fontSize: 30, fontWeight: 900, textShadow: "0 2px 8px rgba(0,0,0,.8)" }}>{detail.meta.name || detail.meta.title}</h2>
+                {detail.kind === "prov" && detail.meta.type === "movie" && detail.meta.url && (
+                  <button className="nfBtn play" style={{ marginTop: 10 }} onClick={() => playProviderMovie(detail.meta)}>▶ Play</button>
+                )}
               </div>
             </div>
-          ) : (
-            <div className="grid" style={{ marginTop: 12 }}>
-              {(searching ? videos : movies).map((v) => <Card key={v.id} v={v} progress={lastWatched[v.id]} />)}
+            <div className="nfModalBody">
+              <div className="nfModalMeta">
+                {detail.meta.year ? `${detail.meta.year}` : ""}
+                {detail.meta.rating ? ` · ⭐ ${Number(detail.meta.rating).toFixed?.(1) || detail.meta.rating}` : ""}
+                {detail.meta.category ? ` · ${detail.meta.category}` : ""}
+                {detail.kind === "addon" ? " · via addons" : " · your provider"}
+              </div>
+              {dInfo?.desc && <div className="nfModalDesc">{dInfo.desc}</div>}
+              {dInfo?.error && <div className="nfMuted" style={{ marginTop: 8 }}>⚠️ {dInfo.error}</div>}
+
+              {/* provider series: season selector + episode list */}
+              {detail.kind === "prov" && detail.meta.type === "series" && (
+                <div className="nfSection">
+                  <h3>Episodes</h3>
+                  {!dInfo?.seasons && <div className="nfMuted">Loading episodes…</div>}
+                  {dInfo?.seasons?.length > 0 && (
+                    <>
+                      <div className="nfSeasons">
+                        {dInfo.seasons.map((s) => (
+                          <button
+                            key={s.season}
+                            className={`nfSeasonBtn${dInfo.season?.season === s.season ? " on" : ""}`}
+                            onClick={() => setDInfo((d) => ({ ...d, season: s }))}
+                          >
+                            Season {s.season}
+                          </button>
+                        ))}
+                      </div>
+                      {(dInfo.season?.episodes || []).map((ep) => (
+                        <button className="nfSrc" key={ep.episode} onClick={() => playProviderEpisode(ep)}>
+                          ▶ S{String(ep.season).padStart(2, "0")}E{String(ep.episode).padStart(2, "0")} — {ep.title || "Episode"}{ep.plot ? ` · ${String(ep.plot).slice(0, 70)}…` : ""}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* addon detail: episode picker for series */}
+              {detail.kind === "addon" && detail.meta.type === "series" && dInfo?.episodes?.length > 0 && (
+                <div className="nfSection">
+                  <h3>Episodes</h3>
+                  <div style={{ maxHeight: 190, overflowY: "auto" }}>
+                    {dInfo.episodes.map((v) => (
+                      <button
+                        key={v.id}
+                        className={`nfEp${dInfo.selEp === `${String(detail.meta.id).split(":")[0]}:${v.season}:${v.episode}` ? " on" : ""}`}
+                        onClick={() => pickAddonEpisode(v)}
+                      >
+                        S{String(v.season).padStart(2, "0")}E{String(v.episode).padStart(2, "0")} {v.name ? `· ${v.name}` : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* sources */}
+              {detail.kind === "addon" && (
+                <div className="nfSection">
+                  <h3>Sources</h3>
+                  {dInfo?.streams == null || dInfo?.loading ? (
+                    <div className="nfMuted">🔎 Checking installed addons for sources…</div>
+                  ) : dInfo.streams.length === 0 ? (
+                    <div className="nfMuted">No sources for this title right now.</div>
+                  ) : (
+                    dInfo.streams.map((s, i) => (
+                      <button className="nfSrc" key={i} onClick={() => playAddon(s)}>
+                        🎞️ {s.addon || "source"} · {s.title || s.name || "stream"}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* provider movie/series: torrent sources via title lookup */}
+              {detail.kind === "prov" && (
+                <div className="nfSection">
+                  <h3>Torrent sources</h3>
+                  {dInfo?.torrent === "pending" && <div className="nfMuted">🔎 Looking for torrent sources…</div>}
+                  {Array.isArray(dInfo?.torrent) && dInfo.torrent.length === 0 && (
+                    <div className="nfMuted">No torrent sources found — provider streams above work right away.</div>
+                  )}
+                  {Array.isArray(dInfo?.torrent) && dInfo.torrent.map((s, i) => (
+                    <button
+                      className="nfSrc" key={i}
+                      onClick={() => setPlaying({ url: s.url, sources: dInfo.torrent.map((x) => ({ url: x.url })), title: detail.meta.name, poster: detail.meta.poster || "" })}
+                    >
+                      🧲 {s.addon || "torrent"} · {s.title || s.name || "stream"}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </section>
-      </main>
+          </div>
+        </div>
+      )}
+
+      {loading && !playing && <div className="nfLoading" style={{ padding: "20px 4%" }}>Loading…</div>}
     </div>
   );
 }

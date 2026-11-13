@@ -528,7 +528,8 @@ export default function TvPage() {
       <aside className="side">
         <div className="brand">Home<span>Stream</span></div>
         <nav>
-          <Link href="/">🎬 Library</Link>
+          <Link href="/">🍿 Home</Link>
+          <Link href="/library">🎬 Library</Link>
           <Link href="/tv">📺 Live TV</Link>
           <Link href="/guide">🗓️ Guide</Link>
           <Link href="/vod">🍿 Movies & TV</Link>

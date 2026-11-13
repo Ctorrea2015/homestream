@@ -222,7 +222,8 @@ export default function VodPage() {
       <aside className="side">
         <div className="brand">Home<span>Stream</span></div>
         <nav>
-          <Link href="/">🎬 Library</Link>
+          <Link href="/">🍿 Home</Link>
+          <Link href="/library">🎬 Library</Link>
           <Link href="/tv">📺 Live TV</Link>
           <Link href="/vod" className="router-link-active">🍿 Movies & TV</Link>
           <Link href="/addons">🧩 Addons</Link>
