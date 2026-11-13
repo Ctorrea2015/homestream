@@ -27,10 +27,14 @@ export async function GET(request) {
   const pageSize = Number(catDef?.pageSize) > 0 ? Number(catDef.pageSize) : 100;
   const skip = Math.max(0, (Math.max(1, Number(p.get("page") || 1)) - 1)) * pageSize;
 
-  // Stremio extra format is path-based: /catalog/<type>/<id>/skip=20.json
-  // (query-string `?skip=` is not supported by many addon back-ends)
+  // Stremio extra format is path-based: /catalog/<type>/<id>/genre=action/skip=20.json
+  // (query-string extras are not supported by many addon back-ends)
   const base = catalogUrl(addon, type, cat).replace(/\.json$/, "");
-  const url = `${base}${skip > 0 ? `/skip=${skip}` : ""}.json`;
+  const genre = p.get("genre") || "";
+  const extraSegs = [];
+  if (genre) extraSegs.push(`genre=${encodeURIComponent(genre)}`);
+  if (skip > 0) extraSegs.push(`skip=${skip}`);
+  const url = `${base}${extraSegs.length ? "/" + extraSegs.join("/") : ""}.json`;
 
   // Free-hosted addons (baby-beamup / Render / Replit …) sleep when idle and
   // answer the waking request with 503/504. Retry a couple of times with a

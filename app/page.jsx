@@ -143,24 +143,51 @@ function Row({ title, items, onPick, nameKey = "name", filter }) {
   );
 }
 
-/** One installed addon catalog as its own scrolling row. Self-fetching. */
+/** Common Stremio genre names — fallback for addons installed before
+ *  manifests started carrying a genres list. */
+const FALLBACK_GENRES = [
+  "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama",
+  "Family", "Fantasy", "History", "Horror", "Music", "Mystery", "Romance",
+  "Sci-Fi & Fantasy", "Thriller", "War", "Western",
+];
+
+const genreValue = (g) => (typeof g === "string" ? g.toLowerCase() : String(g.name || "").toLowerCase());
+const genreLabel = (g) => (typeof g === "string" ? g : g.name);
+
+/** One installed addon catalog as its own scrolling row. Self-fetching.
+ *  Catalogs whose manifest supports a "genre" extra (TMDB) get a genre
+ *  dropdown — that's the Action/Drama/Comedy browsing for torrent titles. */
 function CatalogRow({ addon, cat, onPick }) {
   const [metas, setMetas] = useState(null);
+  const catDef = (addon.catalogs || []).find(
+    (c) => (c.type || "movie") === cat.type && String(c.id || "top") === String(cat.id),
+  );
+  const supportsGenre = (catDef?.extraSupported || []).includes("genre");
+  const genres = (addon.genres?.length ? addon.genres : supportsGenre ? FALLBACK_GENRES : []);
+  const [genre, setGenre] = useState(() => (supportsGenre && genres.length ? genreValue(genres[0]) : ""));
   useEffect(() => {
     let dead = false;
     (async () => {
       try {
-        const res = await fetch(`/api/addons/catalog?a=${encodeURIComponent(addon.id)}&type=${cat.type}&cat=${encodeURIComponent(cat.id)}&page=1`);
+        const gq = genre ? `&genre=${encodeURIComponent(genre)}` : "";
+        const res = await fetch(`/api/addons/catalog?a=${encodeURIComponent(addon.id)}&type=${cat.type}&cat=${encodeURIComponent(cat.id)}&page=1${gq}`);
         const out = await res.json();
         if (!dead) setMetas(res.ok ? out.metas.slice(0, 40) : []);
       } catch { if (!dead) setMetas([]); }
     })();
     return () => { dead = true; };
-  }, [addon.id, cat.type, cat.id]);
+  }, [addon.id, cat.type, cat.id, genre]);
   if (metas && metas.length === 0) return null;
   return (
     <section className="nfRow">
-      <h3 className="nfRowTitle">{addon.name} · {cat.name}</h3>
+      <div className="nfRowHead">
+        <h3 className="nfRowTitle">{addon.name} · {cat.name}</h3>
+        {supportsGenre && genres.length > 0 && (
+          <select className="nfCatSel" value={genre} onChange={(e) => setGenre(e.target.value)} aria-label="Genre">
+            {genres.map((g, i) => <option key={i} value={genreValue(g)}>{genreLabel(g)}</option>)}
+          </select>
+        )}
+      </div>
       <Scroller>
         {!metas
           ? Array.from({ length: 8 }).map((_, i) => <div className="nfCard" key={i}>{noPoster()}</div>)
