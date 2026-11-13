@@ -63,6 +63,10 @@ export async function POST(request) {
       // torrent is actually gone from the list before believing success.
       results.rqbit = "failed";
       for (let attempt = 1; attempt <= 4 && results.rqbit !== "deleted"; attempt++) {
+        // Pause first: rqbit's delete can 500 while the torrent's stream is
+        // still being read (delete racing active reads). Pausing releases it.
+        await fetch(`${base}/torrents/${infoHash}/pause`, { method: "POST" }).catch(() => {});
+        await new Promise((r) => setTimeout(r, 300));
         const res = await fetch(`${base}/torrents/${infoHash}/delete`, { method: "POST" }).catch(() => null);
         if (res && res.ok) {
           // Verify: gone from /torrents? If still listed, keep trying.
