@@ -3,9 +3,23 @@ import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
 import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqAvailable } from "@/lib/rqbit";
 import path from "node:path";
+import fs from "node:fs/promises";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Space floor: refuse new torrents when free space is below this. Writing
+ *  to a 100%-full SD card is how the fs bitmap got corrupted (2026-11-13). */
+const MIN_FREE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+
+async function freeSpaceBytes() {
+  try {
+    const st = await fs.statfs(process.cwd());
+    return st.bavail * st.bsize;
+  } catch {
+    return Infinity; // don't block playback if statfs is unavailable
+  }
+}
 
 const MIME = {
   ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
@@ -30,6 +44,18 @@ export async function GET(request) {
   const rangeHeader = request.headers.get("range");
   if (!/^[a-f0-9]{40}$/.test(infoHash)) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
+  }
+
+  // Space-floor guardrail: never start a torrent write when the disk is
+  // nearly full. Fails fast with a visible message instead of filling the
+  // card to zero and breaking the filesystem.
+  const free = await freeSpaceBytes();
+  if (free < MIN_FREE_BYTES) {
+    console.error(`[stream] SPACE FLOOR: ${(free / 1e9).toFixed(1)} GB free < 5 GB — refusing torrent ${infoHash.slice(0, 10)}…`);
+    return NextResponse.json(
+      { error: `Server disk almost full (${(free / 1e9).toFixed(1)} GB free). Torrents are deleted when you close a player — close open players and try again.` },
+      { status: 507 },
+    );
   }
 
   // ---- Engine 1: rqbit (librqbit) — the lightweight primary -------------------

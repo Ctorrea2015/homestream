@@ -6,6 +6,9 @@ import { killTorrentSessions } from "@/lib/tvSessions";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Coalesce the double-fire (beacon + fetch) within 30 s per infoHash. */
+const recentCleanup = new Map();
+
 /** qB session helper (same shape as lib/qbittorrent.js, minimal inline). */
 async function qbSession() {
   try {
@@ -35,6 +38,15 @@ export async function POST(request) {
     return NextResponse.json({ error: "Missing/invalid infoHash" }, { status: 400 });
   }
 
+  // The player fires both a beacon AND a fetch on Back — they can arrive as
+  // two near-identical POSTs. Coalesce: if the same hash was cleaned within
+  // the last 30 s, answer ok without redoing the work.
+  const now = Date.now();
+  if (recentCleanup.get(infoHash) > now - 30_000) {
+    return NextResponse.json({ ok: true, results: { deduped: true } });
+  }
+  recentCleanup.set(infoHash, now);
+
   const results = {};
   // Order matters: kill the converter sessions FIRST. A still-running ffmpeg
   // keeps re-adding the torrent (its range reads re-invoke the stream route),
@@ -45,9 +57,22 @@ export async function POST(request) {
     try {
       const cfg = await fs.readFile(path.join(process.cwd(), ".data", "rqbit.json"), "utf8")
         .then(JSON.parse).catch(() => ({ host: "http://127.0.0.1:3030" }));
-      // rqbit: delete = forget + remove files
-      const res = await fetch(`${cfg.host.replace(/\/$/, "")}/torrents/${infoHash}/delete`, { method: "POST" });
-      results.rqbit = res.ok ? "deleted" : `HTTP ${res.status}`;
+      const base = cfg.host.replace(/\/$/, "");
+      // rqbit: delete = forget + remove files. Its delete can transiently 500
+      // when it races an active download — retry with backoff, and verify the
+      // torrent is actually gone from the list before believing success.
+      results.rqbit = "failed";
+      for (let attempt = 1; attempt <= 4 && results.rqbit !== "deleted"; attempt++) {
+        const res = await fetch(`${base}/torrents/${infoHash}/delete`, { method: "POST" }).catch(() => null);
+        if (res && res.ok) {
+          // Verify: gone from /torrents? If still listed, keep trying.
+          const still = await fetch(`${base}/torrents`).then((r) => r.json()).catch(() => null);
+          const gone = !still || !JSON.stringify(still).toLowerCase().includes(infoHash);
+          if (gone) { results.rqbit = "deleted"; break; }
+        }
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+        if (attempt === 4) results.rqbit = `HTTP ${res ? res.status : "err"} (after retries)`;
+      }
     } catch (e) { results.rqbit = String(e).slice(0, 80); }
   }
   if (engine === "qb" || engine === "both") {
@@ -60,7 +85,22 @@ export async function POST(request) {
           headers: { Cookie: s.sid },
           body: new URLSearchParams({ hashes: infoHash, deleteFiles: "true" }),
         });
+        // Verify the task actually vanished — a surviving zombie task keeps
+        // the disk space via open handles and re-downloads missing files.
         results.qb = res.ok ? "deleted" : `HTTP ${res.status}`;
+        const check = await fetch(`${s.host}/api/v2/torrents/info?hash=${infoHash}`, {
+          headers: { Cookie: s.sid },
+        });
+        if (check.ok) {
+          const arr = await check.json().catch(() => []);
+          if (Array.isArray(arr) && arr.length > 0) {
+            await fetch(`${s.host}/api/v2/torrents/delete`, {
+              method: "POST", headers: { Cookie: s.sid },
+              body: new URLSearchParams({ hashes: infoHash, deleteFiles: "true" }),
+            }).catch(() => {});
+            results.qb = "deleted (verified after 2nd pass)";
+          }
+        }
       } catch (e) { results.qb = String(e).slice(0, 80); }
     }
   }
