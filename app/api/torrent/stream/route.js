@@ -38,9 +38,29 @@ export async function GET(request) {
     const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
     if (r) {
       console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
-      // rqbit's /stream/{fileIdx} endpoint handles Range itself — proxy it.
-      const proxied = `/api/tv/play?u=${encodeURIComponent(r.streamUrl)}`;
-      return NextResponse.redirect(new URL(proxied, request.url), 302);
+      // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
+      // through directly. (Redirecting used to hand the client the server's
+      // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
+      // so every rqbit-served movie died before playing. Piping also drops
+      // one network hop.)
+      const upstream = await fetch(r.streamUrl, {
+        headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", ...(rangeHeader ? { Range: rangeHeader } : {}) },
+        redirect: "follow",
+      });
+      if (!upstream.ok && upstream.status !== 206) {
+        throw new Error(`rqbit stream endpoint returned HTTP ${upstream.status}`);
+      }
+      const ext = path.extname(r.name).toLowerCase();
+      const headers = {
+        "Content-Type": MIME[ext] || "application/octet-stream",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      };
+      for (const h of ["Content-Length", "Content-Range"]) {
+        const v = upstream.headers.get(h);
+        if (v) headers[h] = v;
+      }
+      return new Response(upstream.body, { status: upstream.status === 206 ? 206 : 200, headers });
     }
   } catch (e) {
     const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
