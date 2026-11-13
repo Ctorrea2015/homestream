@@ -414,6 +414,7 @@ export default function NetflixHome() {
         <nav className="nfNav">
           <Link className="on" href="/">Home</Link>
           <Link href="/library">Library</Link>
+          <Link href="/tvapp">TV App</Link>
           <Link href="/tv">Live TV</Link>
           <Link href="/guide">Guide</Link>
           <Link href="/addons">Addons</Link>
