@@ -78,23 +78,35 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
   // behavior). sendBeacon survives page unload where fetch does not — but
   // iOS can drop beacons on in-app navigation, so the Back button ALSO
   // fires an explicit fetch. Two triggers, one endpoint, idempotent.
-  const cleanupUrl = url?.startsWith("/") && url.includes("/api/torrent/stream")
-    ? (() => {
-        const ih = new URL(url, window.location.origin).searchParams.get("infoHash");
-        return ih ? `/api/torrent/cleanup?infoHash=${ih}&engine=both` : null;
-      })()
-    : null;
+  // Every torrent the player TOUCHED gets cleaned — source cycling means
+  // several magnets (each a separate torrent) may have been added while
+  // hunting a live swarm; all of them are ours to clean up.
+  const allTorrentHashes = (() => {
+    const seen = new Set();
+    for (const s of [{ url }, ...(sources || [])]) {
+      const u = s?.url || "";
+      if (u.startsWith("/") && u.includes("/api/torrent/stream")) {
+        try {
+          const ih = new URL(u, window.location.origin).searchParams.get("infoHash");
+          if (ih) seen.add(ih);
+        } catch {}
+      }
+    }
+    return [...seen];
+  })();
   const fireCleanup = () => {
-    if (!cleanupUrl) return;
-    try { navigator.sendBeacon(cleanupUrl); } catch {}
-    try { fetch(cleanupUrl, { method: "POST", keepalive: true }).catch(() => {}); } catch {}
+    for (const ih of allTorrentHashes) {
+      const cu = `/api/torrent/cleanup?infoHash=${ih}&engine=both`;
+      try { navigator.sendBeacon(cu); } catch {}
+      try { fetch(cu, { method: "POST", keepalive: true }).catch(() => {}); } catch {}
+    }
   };
   useEffect(() => {
-    if (!cleanupUrl) return;
+    if (!allTorrentHashes.length) return;
     const cleanup = () => fireCleanup();
     window.addEventListener("pagehide", cleanup);
     return () => { window.removeEventListener("pagehide", cleanup); cleanup(); };
-  }, [cleanupUrl]);
+  }, [allTorrentHashes.join(",")]);
 
   const isTorrent = url?.startsWith("/") && /\/api\/torrent\/stream/.test(url);
   useEffect(() => { setDuration(null); setSeekBase(0); }, [url]);
