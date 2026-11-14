@@ -43,10 +43,30 @@ const CSS = `
 .tvLoading { color:#999; padding:40px 4%; font-size:16px; }
 .tvHero { padding:30px 4% 10px; }
 .tvHero h1 { font-size:40px; font-weight:900; margin:0; }
+.tvSearchBtn { margin-left:auto; background:#232323; border:2px solid #333; color:#fff;
+  padding:8px 20px; border-radius:8px; font-size:15px; cursor:pointer; }
+.tvSearchBtn.focus { border-color:#fff; background:#333; }
+.tvSearchWrap { max-width:900px; margin:44px auto; padding:0 4%; }
+.tvSearchInput { width:100%; box-sizing:border-box; font-size:22px; padding:14px 18px;
+  border-radius:10px; border:2px solid #444; background:#161616; color:#fff; outline:none; }
+.tvSearchInput:focus { border-color:#e50914; }
+.tvResults { margin-top:18px; display:flex; flex-direction:column; gap:8px; }
+.tvRes { display:flex; gap:14px; align-items:center; background:#1a1a1a; border:2px solid #333;
+  border-radius:10px; padding:10px 14px; color:#fff; cursor:pointer; text-align:left; }
+.tvRes.focus { border-color:#fff; background:#2a2a2a; }
+.tvRes img { width:46px; height:69px; object-fit:cover; border-radius:4px; background:#1c1c1f; flex:0 0 46px; }
+.tvResName { font-size:17px; font-weight:700; }
+.tvResMeta { color:#999; font-size:13px; }
 `;
 
 const noPoster = (
   <div style={{ width: "100%", aspectRatio: "2/3", borderRadius: 6, background: "#1c1c1f", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>
+    🎬
+  </div>
+);
+
+const noPosterSm = (
+  <div style={{ width: 46, height: 69, borderRadius: 4, background: "#1c1c1f", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "0 0 46px" }}>
     🎬
   </div>
 );
@@ -59,9 +79,17 @@ export default function TvApp() {
   const [detail, setDetail] = useState(null);              // {kind:'addon'|'prov', meta}
   const [dInfo, setDInfo] = useState(null);
   const [playing, setPlaying] = useState(null);
+  const [searchFocus, setSearchFocus] = useState(false);   // header Search button highlighted
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null);            // search metas
+  const [searching, setSearching] = useState(false);
+  const [resultFocus, setResultFocus] = useState(0);
   const cardRefs = useRef({});
   const listRefs = useRef({});
   const listLen = useRef(0);
+  const inputRef = useRef(null);
+  const resRefs = useRef({});
 
   useEffect(() => {
     fetch("/api/addons").then((r) => r.json()).then((d) => setAddons(d.addons || [])).catch(() => setAddons([]));
@@ -160,6 +188,32 @@ export default function TvApp() {
     setDInfo(null);
   }
 
+  // ---- search (Cinemeta via /api/addons/search) ------------------------------
+  function openSearch() {
+    setSearchFocus(false);
+    setSearchOpen(true);
+    setQuery("");
+    setResults(null);
+    setSearching(false);
+    setResultFocus(0);
+  }
+
+  async function runSearch() {
+    const term = query.trim();
+    if (!term) return;
+    setSearching(true);
+    setResults(null);
+    setResultFocus(0);
+    try {
+      const res = await fetch(`/api/addons/search?q=${encodeURIComponent(term)}`);
+      const j = res.ok ? await res.json() : {};
+      setResults((j.metas || []).slice(0, 30));
+    } catch {
+      setResults([]);
+    }
+    setSearching(false);
+  }
+
   // ---- D-pad handling --------------------------------------------------------
   useEffect(() => {
     function onKey(e) {
@@ -167,6 +221,25 @@ export default function TvApp() {
       const isBack = k === "Escape" || k === "Backspace" || k === "GoBack" || k === "BrowserBack";
       if (playing) {
         if (isBack) { e.preventDefault(); setPlaying(null); }
+        return;
+      }
+      if (searchOpen) {
+        if (isBack) { e.preventDefault(); setSearchOpen(false); setResults(null); setQuery(""); return; }
+        const n = (results || []).length;
+        if (k === "ArrowDown" && n) {
+          // D-pad Down exits the input (and its on-screen keyboard) into the results
+          e.preventDefault();
+          inputRef.current?.blur();
+          setResultFocus(0);
+        } else if (k === "ArrowDown" || k === "ArrowUp") {
+          if (!n) return;
+          e.preventDefault();
+          setResultFocus((i) => (k === "ArrowDown" ? Math.min(n - 1, i + 1) : Math.max(0, i - 1)));
+        } else if (k === "Enter") {
+          if (document.activeElement === inputRef.current) return; // typing — form submits
+          e.preventDefault();
+          resRefs.current[resultFocus]?.click();
+        }
         return;
       }
       if (detail) {
@@ -180,11 +253,25 @@ export default function TvApp() {
         }
         return;
       }
-      if (!rows.length) return;
+      if (!rows.length) {
+        if (isBack && searchFocus) { e.preventDefault(); setSearchFocus(false); }
+        return;
+      }
+      if (searchFocus) {
+        if (k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") { e.preventDefault(); setSearchFocus(false); }
+        else if (k === "ArrowUp") { e.preventDefault(); }
+        else if (k === "Enter") { e.preventDefault(); openSearch(); }
+        else if (isBack) { e.preventDefault(); setSearchFocus(false); }
+        return;
+      }
       if (k === "ArrowRight") { e.preventDefault(); setFocus((f) => ({ ...f, c: Math.min((rows[f.r]?.items?.length || 1) - 1, f.c + 1) })); }
       else if (k === "ArrowLeft") { e.preventDefault(); setFocus((f) => ({ ...f, c: Math.max(0, f.c - 1) })); }
       else if (k === "ArrowDown") { e.preventDefault(); setFocus((f) => ({ r: Math.min(rows.length - 1, f.r + 1), c: 0 })); }
-      else if (k === "ArrowUp") { e.preventDefault(); setFocus((f) => ({ r: Math.max(0, f.r - 1), c: 0 })); }
+      else if (k === "ArrowUp") {
+        e.preventDefault();
+        if (focus.r === 0) setSearchFocus(true); // ▲ from the top row reaches the Search button
+        else setFocus((f) => ({ r: Math.max(0, f.r - 1), c: 0 }));
+      }
       else if (k === "Enter") {
         e.preventDefault();
         const row = rows[focus.r];
@@ -194,7 +281,7 @@ export default function TvApp() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [playing, detail, focus, listFocus, rows]);
+  }, [playing, detail, focus, listFocus, rows, searchOpen, searchFocus, results, resultFocus, query]);
 
   // keep focused card visible
   useEffect(() => {
@@ -203,6 +290,12 @@ export default function TvApp() {
   useEffect(() => {
     listRefs.current[listFocus]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [listFocus]);
+  useEffect(() => {
+    if (searchOpen) inputRef.current?.focus(); // TV browsers pop their on-screen keyboard here
+  }, [searchOpen]);
+  useEffect(() => {
+    resRefs.current[resultFocus]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [resultFocus, results]);
 
   // ---- detail list model (focusable rows in the modal) ----------------------
   function detailItems() {
@@ -258,7 +351,14 @@ export default function TvApp() {
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
       <header className="tvTop">
         <span className="tvBrand">HOMESTREAM TV</span>
-        <span className="tvHint">◀ ▶ ▲ ▼ browse · OK plays · Back closes</span>
+        <span className="tvHint">◀ ▶ ▲ ▼ browse · ▲ at top = search · OK plays · Back closes</span>
+        <button
+          className={`tvSearchBtn${searchFocus ? " focus" : ""}`}
+          onClick={openSearch}
+          onMouseEnter={() => setSearchFocus(true)}
+        >
+          🔍 Search
+        </button>
       </header>
 
       {playing && (
@@ -304,6 +404,48 @@ export default function TvApp() {
             );
           })}
         </>
+      )}
+
+      {searchOpen && !playing && (
+        <div className="tvModal">
+          <div className="tvSearchWrap">
+            <form onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
+              <input
+                ref={inputRef}
+                className="tvSearchInput"
+                placeholder="Search movies & shows…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoComplete="off"
+              />
+            </form>
+            {searching && <div className="tvMuted" style={{ marginTop: 14 }}>Searching…</div>}
+            <div className="tvResults">
+              {(results || []).map((m, i) => (
+                <button
+                  className={`tvRes${resultFocus === i ? " focus" : ""}`}
+                  key={`${m.id}-${i}`}
+                  ref={(el) => (resRefs.current[i] = el)}
+                  onClick={() => { setSearchOpen(false); openAddonDetail({ ...m, type: m.type || "movie" }); }}
+                  onMouseEnter={() => setResultFocus(i)}
+                >
+                  {m.poster ? <img src={m.poster} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : noPosterSm}
+                  <span>
+                    <div className="tvResName">{m.name}</div>
+                    <div className="tvResMeta">{m.type}{m.releaseInfo ? ` · ${m.releaseInfo}` : ""}</div>
+                  </span>
+                </button>
+              ))}
+              {!searching && results && !results.length && (
+                <div className="tvMuted">No results for “{query}”</div>
+              )}
+              {!searching && !results && (
+                <div className="tvMuted">Type with the TV keyboard, then press Enter / Done</div>
+              )}
+            </div>
+            <div className="tvMuted" style={{ marginTop: 12 }}>Back closes search</div>
+          </div>
+        </div>
       )}
 
       {detail && !playing && (
