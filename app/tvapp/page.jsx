@@ -214,6 +214,17 @@ export default function TvApp() {
     setSearching(false);
   }
 
+  // Auto-search as you type. TV on-screen keyboards (Fire TV/Silk) often don't
+  // submit the form on their "Done"/Enter button, so waiting for Enter means
+  // results never appear. A short debounce fires the search automatically.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const term = query.trim();
+    if (!term) { setResults(null); setSearching(false); return; }
+    const t = setTimeout(() => { runSearch(); }, 650);
+    return () => clearTimeout(t);
+  }, [query, searchOpen]);
+
   // ---- D-pad handling --------------------------------------------------------
   useEffect(() => {
     function onKey(e) {
@@ -455,7 +466,7 @@ export default function TvApp() {
                 <div className="tvMuted">No results for “{query}”</div>
               )}
               {!searching && !results && (
-                <div className="tvMuted">Type with the TV keyboard, then press Enter / Done</div>
+                <div className="tvMuted">Start typing — results appear automatically</div>
               )}
             </div>
             <div className="tvMuted" style={{ marginTop: 12 }}>Back closes search</div>
