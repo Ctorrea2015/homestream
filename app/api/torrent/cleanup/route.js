@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { killTorrentSessions } from "@/lib/tvSessions";
+import { destroyWebTorrent } from "@/lib/torrent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,6 +55,18 @@ export async function POST(request) {
   // so deleting the torrent alone gets undone within seconds.
   await killTorrentSessions(infoHash);
   results.converter = "sessions killed";
+  // The webtorrent engine was the forgotten one: its chunk cache lives in
+  // os.tmpdir()/webtorrent, which is RAM-backed tmpfs on the Pi. Cleanup used
+  // to skip it entirely, so streamed torrents piled up in RAM (4 GB eaten on
+  // an 8 GB Pi). Remove from the client AND sweep the folder directly — the
+  // sweep also catches chunks from torrents evicted before this fix shipped.
+  if (engine === "webtorrent" || engine === "both") {
+    try { results.webtorrent = await destroyWebTorrent(infoHash); } catch (e) { results.webtorrent = String(e).slice(0, 60); }
+    try {
+      await fs.rm(path.join(os.tmpdir(), "webtorrent", infoHash), { recursive: true, force: true });
+      results.webtorrentStore = "chunk cache folder removed";
+    } catch (e) { results.webtorrentStore = String(e).slice(0, 60); }
+  }
   if (engine === "rqbit" || engine === "both") {
     try {
       const cfg = await fs.readFile(path.join(process.cwd(), ".data", "rqbit.json"), "utf8")
