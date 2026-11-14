@@ -3,6 +3,7 @@
 import Link from "next/link";
 import StreamPlayer from "./components/StreamPlayer";
 import ContinueRow from "./components/ContinueRow";
+import { rankStreams } from "@/lib/rankStreams";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /**
@@ -318,7 +319,10 @@ export default function NetflixHome() {
         if (res.ok) for (const s of out.streams || []) players.push({ ...s, addon: a.name });
       } catch {}
     }
-    return players;
+    // Rank for this hardware before the player cycles them: Torrentio's own
+    // order puts 4K REMUX monsters first — the Titanic 117GB-BDRemux class of
+    // source that stalls playback while good 1080p x264 sources sit unseen.
+    return rankStreams(players);
   }
 
   // Stremio's trick for provider titles (no IMDb id): search Cinemeta by name,

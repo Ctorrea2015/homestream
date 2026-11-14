@@ -130,8 +130,11 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
     // the rest of the addon's sources), each tried direct→convert. Torrent
     // swarms differ wildly in health — cycling sources automatically makes
     // TV shows behave like movies instead of dying on one dead swarm.
+    // Capped: Torrentio alone can return 500 sources — cycling all of them
+    // at minutes per torrent would never finish; the ranked best dozen is
+    // where realistic wins live.
     const all = [
-      ...(sources || []),
+      ...(sources || []).slice(0, 14),
       ...(url ? [{ url, label: "" }] : []),
     ];
     const ua = navigator.userAgent || "";

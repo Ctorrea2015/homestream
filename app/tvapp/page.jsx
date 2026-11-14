@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import StreamPlayer from "../components/StreamPlayer";
+import { rankStreams } from "@/lib/rankStreams";
 
 /**
  * TV App ("10-foot UI") — /tvapp
@@ -132,7 +133,8 @@ export default function TvApp() {
         if (res.ok) for (const s of out.streams || []) players.push({ ...s, addon: a.name });
       } catch {}
     }
-    return players;
+    // Rank for this hardware before the player cycles them (see lib/rankStreams.js).
+    return rankStreams(players);
   }
 
   async function torrentSourcesFor(title, type) {
