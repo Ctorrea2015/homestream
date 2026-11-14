@@ -283,11 +283,26 @@ export default function TvApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playing, detail, focus, listFocus, rows, searchOpen, searchFocus, results, resultFocus, query]);
 
+  // Back-button guard: TV browsers (Fire TV/Silk, Tizen) treat the remote's Back
+  // as browser-history back, which would exit /tvapp entirely. While any overlay
+  // is open, trap it and close the topmost layer instead.
+  const overlayOpen = Boolean(playing || detail || searchOpen);
+  useEffect(() => {
+    if (!overlayOpen) return;
+    history.pushState({ hsTv: true }, "");
+    const onPop = () => {
+      if (playing) setPlaying(null);
+      else if (detail) { setDetail(null); setDInfo(null); }
+      else if (searchOpen) { setSearchOpen(false); setResults(null); setQuery(""); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [overlayOpen, playing, detail, searchOpen]);
+
   // keep focused card visible
   useEffect(() => {
     cardRefs.current[`${focus.r}-${focus.c}`]?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
-  }, [focus]);
-  useEffect(() => {
+  }, [focus]);  useEffect(() => {
     listRefs.current[listFocus]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [listFocus]);
   useEffect(() => {
