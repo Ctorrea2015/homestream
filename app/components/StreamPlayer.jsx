@@ -186,7 +186,18 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
         el.src = c.url;
         el.play().catch(() => {});
       } else if (c.hls && Hls.isSupported()) {
-        hls = new Hls({ manifestLoadingTimeOut: 12000 });
+        // Torrent-fed conversion starts SLOW: on a cold swarm the engine may
+        // need a couple of minutes before the first segment's pieces exist.
+        // The stock 12s manifest timeout cascade-failed every source and left
+        // the user spinning while the engine ramped up. Give torrent-backed
+        // candidates a patient window; plain remote HLS keeps the snappy one.
+        const patient = c.url.startsWith("/");
+        hls = new Hls({
+          manifestLoadingTimeOut: patient ? 90000 : 12000,
+          fragLoadingTimeOut: patient ? 90000 : 20000,
+          manifestLoadingMaxRetry: patient ? 6 : 2,
+          fragLoadingMaxRetry: patient ? 8 : 4,
+        });
         hls.on(Hls.Events.MANIFEST_PARSED, () => { settled = true; clearTimeout(watchdog); setStatus(""); el.play().catch(() => {}); });
         hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) advance(); });
         hls.loadSource(c.url);
