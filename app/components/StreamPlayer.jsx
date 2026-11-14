@@ -144,8 +144,9 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
       const shared = s.label ? ` ${s.label}` : "";
       if (isLocal) {
         const seekQ = seekBase > 0 ? `&seek=${Math.floor(seekBase)}` : "";
-        const convert = { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls&vod=1${seekQ}`, hls: true, label: s.forceConvert ? `⏩ Skipping to ${fmtTime(seekBase)} — engine grabbing that part…` : `⚙️ Converting on the server (browser-safe)${shared} — starting…` };
-        const direct = { url: s.url, hls: /\.m3u8/i.test(s.url), label: "" };
+        const torrentBacked = /\/api\/torrent\/stream/.test(s.url);
+        const convert = { url: `/api/tv/transcode?u=${encodeURIComponent(s.url)}&f=hls&vod=1${seekQ}`, hls: true, torrent: torrentBacked, label: s.forceConvert ? `⏩ Skipping to ${fmtTime(seekBase)} — engine grabbing that part…` : `⚙️ Converting on the server (browser-safe)${shared} — starting…` };
+        const direct = { url: s.url, hls: /\.m3u8/i.test(s.url), torrent: torrentBacked, label: "" };
         const pair = s.forceConvert ? [convert] : (safari ? [convert, direct] : [direct, convert]);
         for (const c of pair) {
           cands.push({ ...c, src: k + 1, of: all.length, title: s.title || "" });
@@ -174,13 +175,15 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
         ? (c.label || "⚙️ Torrent engine: downloading on the server (first play can take a minute)…")
         : (c.label || "Connecting…");
       setStatus(`${srcTag}${processing}`);
-      watchdog = setTimeout(() => { if (!settled && el.readyState < 3) advance(); }, c.url.startsWith("/") ? 120000 : 15000);
-      // On iPhone/iPad, prefer Safari's NATIVE HLS (el.src) over hls.js:
-      // recent iOS can run hls.js too, but MSE media is not AirPlay-castable
-      // and hides the AirPlay icon. Native HLS is the only path that gives
-      // the AirPlay button on Apple devices.
+      watchdog = setTimeout(() => { if (!settled && el.readyState < 3) advance(); }, c.torrent ? 300000 : (c.url.startsWith("/") ? 120000 : 15000));
+      // On iPhone/iPad, prefer Safari's NATIVE HLS (el.src) over hls.js for
+      // regular streams — native is the only path that shows the AirPlay
+      // button. BUT for torrent-backed streams we deliberately use hls.js
+      // even on iOS: native HLS has no timeout or error control, so a cold
+      // swarm stalled it silently forever (user opted out of AirPlay for
+      // torrents anyway). hls.js gives us patient timeouts + real errors.
       const nativeHls = el.canPlayType("application/vnd.apple.mpegurl");
-      if (c.hls && nativeHls) {
+      if (c.hls && nativeHls && !c.torrent) {
         el.onplaying = () => { settled = true; clearTimeout(watchdog); setStatus(""); };
         el.onerror = () => { if (!settled) advance(); };
         el.src = c.url;
