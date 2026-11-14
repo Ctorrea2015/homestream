@@ -157,8 +157,21 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
       }
     });
 
-    let i = 0, settled = false, hls = null, watchdog = null;
+    let i = 0, settled = false, hls = null, watchdog = null, curHash = null;
     const el = videoRef.current;
+
+    // The infoHash a candidate streams from (unwraps the converter's ?u=).
+    const hashOf = (u) => {
+      try {
+        const url = new URL(u, window.location.origin);
+        const inner = url.searchParams.get("u");
+        const target = inner ? new URL(inner, window.location.origin) : url;
+        if (target.pathname.includes("/api/torrent/stream")) {
+          return (target.searchParams.get("infoHash") || "").toLowerCase() || null;
+        }
+      } catch {}
+      return null;
+    };
 
     function cleanup() {
       if (hls) { hls.destroy(); hls = null; }
@@ -166,10 +179,23 @@ export default function StreamPlayer({ url, sources, title, poster, back }) {
       el.onerror = null; el.onplaying = null;
       el.removeAttribute("src");
     }
-    function advance() { cleanup(); i += 1; tryCand(); }
+    function advance() {
+      cleanup();
+      const prevHash = curHash;
+      i += 1;
+      const nextHash = i < cands.length ? hashOf(cands[i].url) : null;
+      // Moving to a DIFFERENT torrent: the abandoned one would otherwise keep
+      // downloading at full speed alongside the new one until the player is
+      // closed (its zombie bandwidth competes with the source we're trying).
+      if (prevHash && prevHash !== nextHash) {
+        try { fetch(`/api/torrent/cleanup?infoHash=${prevHash}&engine=both`, { method: "POST", keepalive: true }).catch(() => {}); } catch {}
+      }
+      tryCand();
+    }
     function tryCand() {
       if (i >= cands.length) { setStatus("All sources failed — the torrent swarms are quiet right now. Try again later or another title."); return; }
       const c = cands[i];
+      curHash = hashOf(c.url);
       const srcTag = c.of > 1 ? `Source ${c.src}/${c.of} — ` : "";
       let processing = c.url.startsWith("/")
         ? (c.label || "⚙️ Torrent engine: downloading on the server (first play can take a minute)…")
