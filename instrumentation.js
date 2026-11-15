@@ -20,6 +20,10 @@ export async function register() {
       encodeURI(process.cwd().replace(/\\/g, "/"));
     const { startWatchTimer } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/autoscan.js`);
     startWatchTimer();
+    // Disk sweep: hourly cleanup of the torrent scratch folders (rqbit output,
+    // qB save paths) so they can't fill the disk again (two disk-full incidents).
+    const { startDiskSweep } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/diskSweep.js`);
+    startDiskSweep();
   } catch {
     // The app still works fully manually if this fails.
   }
