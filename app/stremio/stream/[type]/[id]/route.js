@@ -7,6 +7,9 @@ import { showIdFor } from "@/lib/videos";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** id → { at, list } — 5-min cache of successful addon stream lookups. */
+const streamCache = new Map();
+
 /**
  * GET /stremio/stream/{type}/{id}.json
  * Streams for the HomeStream addon, spoken in Stremio dialect:
@@ -56,22 +59,35 @@ export async function GET(request, { params }) {
 
   // ---- tt ids: ranked torrent sources through the server's engine ----------
   const torrentId = type === "series" && id.includes(":") ? id : id; // addons want the :s:e form for series
-  const addons = (await readAddons()).filter(
-    (a) => (a.types || []).includes(type) || (a.types || []).includes("all")
-  );
-  const results = await Promise.allSettled(
-    addons.map(async (a) => {
-      const res = await fetch(streamUrl(a, type, torrentId), {
-        headers: { "User-Agent": "HomeStream/1.0" },
-        signal: AbortSignal.timeout(25000),
-      });
-      if (!res.ok) return [];
-      const data = await res.json().catch(() => null);
-      return normalizeStreams(data?.streams);
-    })
-  );
-  const all = [];
-  for (const r of results) if (r.status === "fulfilled") all.push(...r.value);
+  // Cache successful addon answers for 5 min: Torrentio can take 10-25 s and
+  // rate-limits aggressively — clients (Debrify) time out and report "no
+  // playable source" while the server was still waiting. Repeat taps and
+  // client retries now get the instant cached list instead.
+  const cacheKey = `${type}|${torrentId}`;
+  const now = Date.now();
+  const hit = streamCache.get(cacheKey);
+  let all;
+  if (hit && now - hit.at < 5 * 60 * 1000) {
+    all = hit.list;
+  } else {
+    const addons = (await readAddons()).filter(
+      (a) => (a.types || []).includes(type) || (a.types || []).includes("all")
+    );
+    const results = await Promise.allSettled(
+      addons.map(async (a) => {
+        const res = await fetch(streamUrl(a, type, torrentId), {
+          headers: { "User-Agent": "HomeStream/1.0" },
+          signal: AbortSignal.timeout(25000),
+        });
+        if (!res.ok) return [];
+        const data = await res.json().catch(() => null);
+        return normalizeStreams(data?.streams);
+      })
+    );
+    all = [];
+    for (const r of results) if (r.status === "fulfilled") all.push(...r.value);
+    if (all.length) streamCache.set(cacheKey, { at: now, list: all });
+  }
 
   // Ranked for the Pi + client (1080p/x264/seeders first), then made absolute
   // so Debrify — wherever it runs — reaches the SERVER, not itself.
