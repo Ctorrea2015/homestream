@@ -75,10 +75,21 @@ export async function GET(request, { params }) {
 
   // Ranked for the Pi + client (1080p/x264/seeders first), then made absolute
   // so Debrify — wherever it runs — reaches the SERVER, not itself.
+  // For series, append the requested SxxEyy to the name hint: the addon's
+  // pack title ("Rules of Engagement Season 1 Complete") carries NO episode
+  // marker, so the engine's episode picker had nothing to match and grabbed
+  // the pack's biggest file instead of the requested episode.
+  const epM = type === "series" ? /:(\d{1,2}):(\d{1,3})$/.exec(id) : null;
+  const epTag = epM ? ` S${String(Number(epM[1])).padStart(2, "0")}E${String(Number(epM[2])).padStart(2, "0")}` : "";
   const ranked = rankStreams(all).slice(0, 12);
   for (const s of ranked) {
     try {
       const abs = new URL(s.url, base);
+      if (epTag && s.source === "torrent" && abs.pathname === "/api/torrent/stream") {
+        const q = abs.searchParams;
+        q.set("name", (q.get("name") || "") + epTag);
+        abs.search = q.toString();
+      }
       streams.push({
         title: (s.source === "torrent" ? "🎬 " : "") + s.title,
         url: abs.toString(),
