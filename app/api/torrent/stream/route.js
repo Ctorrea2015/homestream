@@ -4,6 +4,7 @@ import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqAvailable } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { touchStream } from "@/lib/idleTorrents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +65,7 @@ export async function GET(request) {
     const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
     if (r) {
       console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
+      touchStream(infoHash); // ledger: a client is reading this torrent
       // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
       // through directly. (Redirecting used to hand the client the server's
       // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
@@ -98,6 +100,7 @@ export async function GET(request) {
     const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
     if (q) {
       console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
+      touchStream(infoHash); // ledger: a client is reading this torrent
       const ext = path.extname(q.name).toLowerCase();
       const headers = {
         "Content-Type": MIME[ext] || "application/octet-stream",
@@ -132,6 +135,7 @@ export async function GET(request) {
   }
 
   t._hsTouch = Date.now();
+  touchStream(infoHash); // ledger: a client is reading this torrent
   const file = pick.file;
   prioritizePieces(t, file); // aim the swarm at this file's pieces
   // External players (VLC/Infuse) give up fast when connected to a stream
