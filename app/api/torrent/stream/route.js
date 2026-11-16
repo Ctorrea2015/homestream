@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
 import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
-import { rqEnsureTorrent, rqAvailable } from "@/lib/rqbit";
+import { rqEnsureTorrent, rqAvailable, rqWaitForData } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { touchStream } from "@/lib/idleTorrents";
@@ -66,6 +66,13 @@ export async function GET(request) {
     if (r) {
       console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
       touchStream(infoHash); // ledger: a client is reading this torrent
+      // Warm-up hold: rqbit's stream endpoint answers with headers even when
+      // zero pieces exist. Clients with aggressive connect timeouts (Debrify)
+      // see "no data" and quit — so hold here until the first bytes land
+      // (same treatment the webtorrent path always had).
+      const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
+      const warmed = await rqWaitForData(rid, infoHash, 60000);
+      if (!warmed) console.error(`[stream] rqbit: no first bytes after 60s — serving ${r.name} anyway (client may still connect)`);
       // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
       // through directly. (Redirecting used to hand the client the server's
       // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
