@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
+import { withCors, corsPreflight } from "@/lib/stremioCors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function OPTIONS() {
+  return corsPreflight();
+}
 
 /**
  * GET /stremio/manifest.json

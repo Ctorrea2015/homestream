@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { corsPreflight } from "@/lib/stremioCors";
 import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { readLibrary } from "@/lib/videos";
 import { rankStreams } from "@/lib/rankStreams";
@@ -6,6 +7,10 @@ import { showIdFor } from "@/lib/videos";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function OPTIONS() {
+  return corsPreflight();
+}
 
 /** id → { at, list } — 5-min cache of successful addon stream lookups. */
 const streamCache = new Map();

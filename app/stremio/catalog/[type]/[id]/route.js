@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { withCors, corsPreflight } from "@/lib/stremioCors";
 import { readLibrary, cleanTitle, prettyName, showIdFor } from "@/lib/videos";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function OPTIONS() {
+  return corsPreflight();
+}
 
 /**
  * GET /stremio/catalog/{movie|series}/hs-library.json
