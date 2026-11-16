@@ -29,6 +29,30 @@ const MIME = {
 };
 
 /**
+ * Pull the head and tail of the focused file through rqbit's stream endpoint.
+ * rqbit downloads pieces on demand — HTTP reads act as prioritization hints.
+ * A player needs the FILE HEAD (start) and the TAIL (mkv seek index/cues);
+ * without this, "any bytes fetched" can be the tail (from an earlier probe)
+ * while the head starves and playback never starts (Fear Factor ep3,
+ * 2026-11-16: end-range served instantly, start-range hung forever).
+ */
+async function warmHeadTail(streamUrl, size) {
+  const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
+  const grab = async (range) => {
+    try {
+      const res = await fetch(streamUrl, { headers: { ...H, Range: range }, signal: AbortSignal.timeout(120000) });
+      if (res.ok || res.status === 206) await res.arrayBuffer(); // pull the bytes through
+      else await res.body?.cancel();
+    } catch {}
+  };
+  const tailStart = Math.max(0, (Number(size) || 0) - 1048576);
+  await Promise.allSettled([
+    grab("bytes=0-1048575"),
+    Number(size) > 2097152 ? grab(`bytes=${tailStart}-${Number(size) - 1}`) : Promise.resolve(),
+  ]);
+}
+
+/**
  * GET /api/torrent/stream?infoHash=<40-hex> — proxies a BitTorrent file as
  * chunkable HTTP video (206 Range requests), exactly like Stremio's local
  * stream server. First play needs swarm peers, so it can take a while to
@@ -73,6 +97,9 @@ export async function GET(request) {
       const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
       const warmed = await rqWaitForData(rid, infoHash, 60000);
       if (!warmed) console.error(`[stream] rqbit: no first bytes after 60s — serving ${r.name} anyway (client may still connect)`);
+      // Force the head+tail pieces to exist: fire-and-forget, the response
+      // streams as soon as THIS range has data.
+      warmHeadTail(r.streamUrl, r.size).catch(() => {});
       // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
       // through directly. (Redirecting used to hand the client the server's
       // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
