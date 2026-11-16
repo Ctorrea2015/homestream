@@ -4,6 +4,7 @@ import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { readLibrary } from "@/lib/videos";
 import { rankStreams } from "@/lib/rankStreams";
 import { showIdFor } from "@/lib/videos";
+import { rqEnsureTorrent } from "@/lib/rqbit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,6 +104,30 @@ export async function GET(request, { params }) {
   const epM = type === "series" ? /:(\d{1,2}):(\d{1,3})$/.exec(id) : null;
   const epTag = epM ? ` S${String(Number(epM[1])).padStart(2, "0")}E${String(Number(epM[2])).padStart(2, "0")}` : "";
   const ranked = rankStreams(all).slice(0, 12);
+
+  // Pre-warm the best torrent source: register it with rqbit NOW, in the
+  // background, so the swarm wakes up while the user is still looking at the
+  // source list. Direct clients (Debrify) have aggressive connect timeouts —
+  // a play request that starts cold loses the race; one that starts warm
+  // streams immediately. The janitor still cleans it if never played.
+  try {
+    const best = ranked.find((s) => s.source === "torrent");
+    if (best) {
+      const abs0 = new URL(best.url, base);
+      if (abs0.pathname === "/api/torrent/stream") {
+        const h = abs0.searchParams.get("infoHash");
+        const hint = (abs0.searchParams.get("name") || "") + epTag;
+        const trs = abs0.searchParams.getAll("tr");
+        if (h && /^[a-f0-9]{40}$/i.test(h)) {
+          rqEnsureTorrent({ infoHash: h.toLowerCase(), nameHint: hint, trackers: trs })
+            .catch(() => {})
+            .finally(() => {}); // fire-and-forget
+          console.log(`[stremio] pre-warming best torrent source ${h.slice(0, 10)}… (${(best.title || "").slice(0, 60)})`);
+        }
+      }
+    }
+  } catch {}
+
   for (const s of ranked) {
     try {
       const abs = new URL(s.url, base);
