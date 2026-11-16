@@ -5,6 +5,7 @@ import { readLibrary } from "@/lib/videos";
 import { rankStreams } from "@/lib/rankStreams";
 import { showIdFor } from "@/lib/videos";
 import { rqEnsureTorrent } from "@/lib/rqbit";
+import { touchStream } from "@/lib/idleTorrents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,7 +120,13 @@ export async function GET(request, { params }) {
         const hint = (abs0.searchParams.get("name") || "") + epTag;
         const trs = abs0.searchParams.getAll("tr");
         if (h && /^[a-f0-9]{40}$/i.test(h)) {
-          rqEnsureTorrent({ infoHash: h.toLowerCase(), nameHint: hint, trackers: trs })
+          h = h.toLowerCase();
+          // Mark liveness NOW: all episodes of a season often share ONE pack
+          // infoHash — without a fresh touch, the janitor judges it idle from
+          // the PREVIOUS episode's timestamp and deletes it minutes after
+          // pre-warm (the Fear Factor ep3 kill, 2026-11-16).
+          touchStream(h);
+          rqEnsureTorrent({ infoHash: h, nameHint: hint, trackers: trs })
             .catch(() => {})
             .finally(() => {}); // fire-and-forget
           console.log(`[stremio] pre-warming best torrent source ${h.slice(0, 10)}… (${(best.title || "").slice(0, 60)})`);
