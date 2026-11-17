@@ -24,6 +24,11 @@ export async function register() {
     // qB save paths) so they can't fill the disk again (two disk-full incidents).
     const { startDiskSweep } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/diskSweep.js`);
     startDiskSweep();
+    // rqbit watchdog: detects a frozen rqbit daemon (answers reads, hangs on
+    // adds — Engine 1 silently dies and everything falls to qB) and restarts
+    // it in place, no reboot needed.
+    const { startRqbitWatchdog } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/rqbitWatchdog.js`);
+    startRqbitWatchdog();
   } catch {
     // The app still works fully manually if this fails.
   }
