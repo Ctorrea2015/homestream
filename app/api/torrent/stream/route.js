@@ -4,7 +4,7 @@ import { qbEnsureTorrent, qbReadRange, qbAvailable, qbTorrentProgress } from "@/
 import { rqEnsureTorrent, rqAvailable, rqWaitForData } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { touchStream } from "@/lib/idleTorrents";
+import { touchStream, openStream, closeStream } from "@/lib/idleTorrents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +20,29 @@ async function freeSpaceBytes() {
   } catch {
     return Infinity; // don't block playback if statfs is unavailable
   }
+}
+
+/**
+ * Wrap a response body so the janitor can see a LIVE connection. A player
+ * (Debrify especially) opens ONE long-lived Range connection for a whole
+ * movie — zero new HTTP requests while it reads — so request-counting alone
+ * let the janitor delete an actively-watched stream (Between the Lions,
+ * 2026-11-17). This wrapper: registers the connection at open, refreshes the
+ * liveness lease on EVERY chunk that flows, and deregisters on close/cancel.
+ */
+function trackStream(source, infoHash) {
+  const web = source instanceof ReadableStream ? source : ReadableStream.from(source);
+  return web.pipeThrough(
+    new TransformStream({
+      start() { openStream(infoHash); },
+      transform(chunk, controller) {
+        touchStream(infoHash); // every flowing chunk = still watching
+        controller.enqueue(chunk);
+      },
+      cancel() { closeStream(infoHash); },
+      flush() { closeStream(infoHash); },
+    })
+  );
 }
 
 const MIME = {
@@ -80,7 +103,7 @@ async function serveFromQb(q, rangeHeader) {
   headers["Content-Range"] = `bytes ${start}-${end}/${q.size}`;
   headers["Content-Length"] = String(end - start + 1);
   const node = qbReadRange(q.filePath, start, end);
-  return new Response(node, { status: 206, headers });
+  return new Response(trackStream(node, q.qbHash || ""), { status: 206, headers });
 }
 
 export async function GET(request) {
@@ -159,7 +182,7 @@ export async function GET(request) {
         const v = upstream.headers.get(h);
         if (v) headers[h] = v;
       }
-      return new Response(upstream.body, { status: upstream.status === 206 ? 206 : 200, headers });
+      return new Response(trackStream(upstream.body, infoHash), { status: upstream.status === 206 ? 206 : 200, headers });
     }
   } catch (e) {
     const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
@@ -219,7 +242,7 @@ export async function GET(request) {
 
   if (!rangeHeader) {
     headers["Content-Length"] = String(file.length);
-    return new Response(file.stream(), { status: 200, headers });
+    return new Response(trackStream(file.stream(), infoHash), { status: 200, headers });
   }
 
   const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
@@ -235,5 +258,5 @@ export async function GET(request) {
   headers["Content-Length"] = String(end - start + 1);
 
   const node = file.createReadStream({ start, end });
-  return new Response(node, { status: 206, headers });
+  return new Response(trackStream(node, infoHash), { status: 206, headers });
 }
