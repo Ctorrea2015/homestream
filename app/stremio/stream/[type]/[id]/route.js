@@ -18,6 +18,51 @@ export async function OPTIONS() {
 const streamCache = new Map();
 
 /**
+ * Scoped pre-fetch: pull the FOCUSED EPISODE (not the season) to disk before
+ * the user presses play, by reading rqbit's stream endpoint sequentially —
+ * every read is a piece-prioritization hint, so the swarm fills the file
+ * front to back while the user browses. Playback then starts off disk and
+ * can't be ambushed by weak swarms mid-watch.
+ *
+ * Bounds (deliberate — this must never become a hoarder):
+ *   • one infoHash prefetched at a time (globalThis registry)
+ *   • one episode's bytes only (streamUrl is the focused file)
+ *   • the janitor's 30-min idle rule still deletes it untouched
+ *   • the stream route's head+tail + warm-up hold keep working for any
+ *     episode that isn't prefetched yet (prefetch is best-effort)
+ */
+const PREFETCH_CHUNK = 4 * 1024 * 1024; // 4 MB per read
+
+async function prefetchEpisode(streamUrl, size, infoHash) {
+  const g = globalThis;
+  if (!g.__hsPrefetching) g.__hsPrefetching = new Set();
+  const inflight = g.__hsPrefetching;
+  const key = String(infoHash).toLowerCase();
+  if (inflight.has(key)) return; // already pulling this torrent
+  inflight.add(key);
+  const started = Date.now();
+  console.log(`[prefetch] pulling ${(size / 1048576).toFixed(0)} MB for ${key.slice(0, 10)}… (episode only, janitor still owns it)`);
+  try {
+    for (let i = 0; i < size; i += PREFETCH_CHUNK) {
+      const end = Math.min(i + PREFETCH_CHUNK, size) - 1;
+      const res = await fetch(streamUrl, {
+        headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", Range: `bytes=${i}-${end}` },
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (!res.ok && res.status !== 206) break; // engine lost it — stop quietly
+      await res.arrayBuffer(); // read the bytes through (drives prioritization)
+    }
+    console.log(`[prefetch] ${key.slice(0, 10)}… done in ${Math.round((Date.now() - started) / 1000)}s`);
+  } catch {
+    // engine deleted (janitor), swarm died, or timeout — prefetch is
+    // best-effort; the stream route's warm-up hold still covers playback
+    console.log(`[prefetch] ${key.slice(0, 10)}… stopped early (best-effort)`);
+  } finally {
+    inflight.delete(key);
+  }
+}
+
+/**
  * GET /stremio/stream/{type}/{id}.json
  * Streams for the HomeStream addon, spoken in Stremio dialect:
  *   hs<videoId>            → a library file, served by /api/stream (Range-ready)
@@ -127,8 +172,10 @@ export async function GET(request, { params }) {
           // pre-warm (the Fear Factor ep3 kill, 2026-11-16).
           touchStream(h);
           rqEnsureTorrent({ infoHash: h, nameHint: hint, trackers: trs })
-            .catch(() => {})
-            .finally(() => {}); // fire-and-forget
+            .then((r) => {
+              if (r?.streamUrl && r?.size) prefetchEpisode(r.streamUrl, r.size, h);
+            })
+            .catch(() => {}); // fire-and-forget
           console.log(`[stremio] pre-warming best torrent source ${h.slice(0, 10)}… (${(best.title || "").slice(0, 60)})`);
         }
       }
