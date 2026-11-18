@@ -135,13 +135,14 @@ async function ensureTorrServer() {
   return false;
 }
 
-async function tryTorrServer(infoHash, rangeHeader, trackers = []) {
+async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = "") {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
-  // Register as a MAGNET LINK with trackers — a bare hash gets no tracker
-  // announcements, so the swarm stays at 0 peers and metadata never loads
-  // (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
+  // Register as a MAGNET LINK with trackers + display name — a bare hash gets
+  // no tracker announcements, so the swarm stays at 0 peers and metadata never
+  // loads (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
   const magnet = `magnet:?xt=urn:btih:${infoHash}` +
+    (nameHint ? `&dn=${encodeURIComponent(nameHint.trim())}` : "") +
     trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
   await fetch(`http://127.0.0.1:8090/api/torrents`, {
     method: "POST",
@@ -150,34 +151,71 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = []) {
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1000));
-  // Warm-up: wake the torrent and trigger file preload, then wait until
-  // TorrServer has actually cached some bytes. Serving with an empty cache
-  // makes the player freeze after the first buffer (TorrServer test, 2026-11-18).
+  // Wake the torrent so metadata resolution starts immediately.
   await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/wake`, {
     method: "POST", signal: AbortSignal.timeout(5000),
   }).catch(() => {});
-  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/0/preload`, {
-    method: "POST", signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
-  // Poll torrent stats up to 45s: metadata loaded (torrent_size>0) AND some
-  // bytes written. Serving before that = player freezes (TorrServer test, 2026-11-18).
+  // Phase 1 — wait for METADATA (torrent_size > 0). Without it the file list
+  // is empty and /api/stream/{hash}/{idx} returns 404 (observed 2026-11-18:
+  // swarm delivered metadata ~60s in, after our 45s warm-up had given up).
   const warmStart = Date.now();
-  let warmed = false;
-  while (Date.now() - warmStart < 45000) {
+  let meta = null;
+  while (Date.now() - warmStart < 90000) {
     try {
       const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
         signal: AbortSignal.timeout(3000),
       }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
       const t = (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash);
-      if (t && Number(t.torrent_size) > 0 && Number(t.bytes_written) > 0) {
-        warmed = true;
-        break;
-      }
+      if (t && Number(t.torrent_size) > 0) { meta = t; break; }
     } catch {}
     await new Promise((r) => setTimeout(r, 1500));
   }
-  if (!warmed) console.error(`[stream] TorrServer: metadata/bytes not ready after 45s — serving anyway (weak swarm?)`);
-  const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/0`;
+  if (!meta) throw new Error("torrserver metadata not ready after 90s (dead swarm)");
+  // Phase 2 — pick the RIGHT file: fetch the file list and match the name
+  // hint (S01E02 etc.). Hardcoding index 0 hit 404s / wrong files in packs.
+  let fileIdx = 0;
+  try {
+    const det = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}`, {
+      signal: AbortSignal.timeout(5000),
+    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const files = det?.files || det?.file_list || det?.FileList || [];
+    if (files.length) {
+      const VIDEO = /\.(mp4|mkv|avi|mov|webm|ts|m4v)$/i;
+      const videos = files.map((f, i) => ({ f, i })).filter(({ f }) =>
+        VIDEO.test(String(f.path || f.name || f.Path || f.Name || "")));
+      const hint = nameHint.toLowerCase().trim();
+      const epM = /s(\d{1,2})[._ -]?e(\d{1,3})/i.exec(hint);
+      let pickIdx = -1;
+      if (epM) {
+        const tag = `s${String(Number(epM[1])).padStart(2, "0")}e${String(Number(epM[2])).padStart(2, "0")}`;
+        pickIdx = videos.find(({ f }) =>
+          String(f.path || f.name || f.Path || f.Name || "").toLowerCase().replace(/[._ -]/g, "")
+            .includes(tag.replace(/[._ -]/g, "")))?.i ?? -1;
+      }
+      if (pickIdx < 0 && videos.length) pickIdx = videos[0].i; // first video file
+      if (pickIdx >= 0) fileIdx = pickIdx;
+    }
+  } catch {}
+  // Phase 3 — preload the chosen file and wait for first bytes so the player
+  // doesn't freeze on an empty RAM cache.
+  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/${fileIdx}/preload`, {
+    method: "POST", signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+  const byteStart = Date.now();
+  let hasBytes = false;
+  while (Date.now() - byteStart < 45000) {
+    if (Number(meta.bytes_written || 0) > 0) { hasBytes = true; break; }
+    try {
+      const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
+        signal: AbortSignal.timeout(3000),
+      }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const t = (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash);
+      if (t && Number(t.bytes_written || 0) > 0) { hasBytes = true; break; }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (!hasBytes) console.error(`[stream] TorrServer: no bytes after preload — serving anyway (slow swarm)`);
+  const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/${fileIdx}`;
   // Stream from TorrServer — it serves Range requests from RAM cache
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
   const res = await fetch(streamUrl, {
@@ -192,7 +230,7 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = []) {
         "Cache-Control": "no-store",
       } });
   }
-  throw new Error(`torrserver returned ${res.status}`);
+  throw new Error(`torrserver returned ${res.status} for file ${fileIdx}`);
 }
 
 /** GET /api/torrent/stream?infoHash=<40-hex> — proxies a BitTorrent file as
@@ -207,8 +245,8 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = []) {
  * binary is available via HS_TORRSERVER_BIN.
  */
 /** Serve a byte range out of a TorrServer-served torrent. */
-async function serveFromTorrServer(infoHash, rangeHeader, trackers) {
-  const resp = await tryTorrServer(infoHash, rangeHeader, trackers);
+async function serveFromTorrServer(infoHash, rangeHeader, trackers, nameHint) {
+  const resp = await tryTorrServer(infoHash, rangeHeader, trackers, nameHint);
   return resp; // Response on success, throws on failure
 }
 
@@ -217,6 +255,7 @@ export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const infoHash = ((sp.get("infoHash")) || "").toLowerCase();
   const nameHint = sp.get("name") + " " + (sp.get("ep") || "").toUpperCase(); // "S01E02" helps pick the right file in season packs
+  const trackers = sp.getAll("tr"); // addon-injected trackers (Stremio's trick) — declared early: engines below reference it before the old line-304 spot (TDZ ReferenceError silently killed the qB pre-check)
   const rangeHeader = request.headers.get("range");
   if (!/^[a-f0-9]{40}$/.test(infoHash)) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
@@ -252,7 +291,7 @@ export async function GET(request) {
 
   // ---- Engine 1: TorrServer (RAM-cache, instant start) -----------------------
   try {
-    const resp = await serveFromTorrServer(infoHash, rangeHeader, sp.getAll("tr"));
+    const resp = await serveFromTorrServer(infoHash, rangeHeader, trackers, nameHint);
     if (resp) {
       console.log(`[stream] TorrServer engine serving ${infoHash.slice(0, 8)}… (RAM cache)`);
       return resp;
@@ -263,7 +302,6 @@ export async function GET(request) {
   }
 
   // ---- Engine 2: rqbit (librqbit) — fallback ----------------------------------
-  const trackers = sp.getAll("tr"); // addon-injected trackers (Stremio's trick)
   try {
     const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
     if (r) {
