@@ -154,6 +154,16 @@ async function tsGetTorrent(infoHash) {
   } catch { return null; }
 }
 
+/** Ready to serve = real video bytes in RAM, not just metadata. A 10 KB/s
+ *  "2 seeders" swarm (observed 2026-11-18: preloaded 800KB of a 16MB target)
+ *  makes players spin forever, so demand either 4MB preloaded (cumulative,
+ *  can't lie) or ≥200KB/s instantaneous (fast swarm, passes early). */
+function tsReady(t) {
+  if (!t || Number(t.torrent_size) <= 0) return false;
+  return Number(t.preloaded_bytes || 0) >= 4194304 ||
+    Number(t.download_speed || 0) >= 200000;
+}
+
 async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = "") {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
@@ -166,9 +176,7 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
   let fileIdx = -1;
   if (warm && Date.now() - warm.at < TS_WARM_TTL) {
     const still = await tsGetTorrent(infoHash);
-    const ok = still && Number(still.torrent_size) > 0 &&
-      (Number(still.bytes_written) >= 1048576 || Number(still.download_speed) > 0);
-    if (ok) fileIdx = warm.fileIdx;
+    if (tsReady(still)) fileIdx = warm.fileIdx;
     else tsWarm().delete(infoHash); // dead swarm / janitor deleted / TorrServer restarted
   }
 
@@ -209,11 +217,15 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
     const det = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}`, {
       signal: AbortSignal.timeout(5000),
     }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const files = det?.files || det?.file_list || det?.FileList || [];
+    // This build exposes the list as `file_stats` (id/path/name/length) — the
+    // old files/file_list/FileList lookup never matched, so we always served
+    // index 0 (Episode 01) no matter which episode was picked (2026-11-18).
+    const files = det?.file_stats || det?.files || det?.file_list || det?.FileList || [];
     if (files.length) {
       const VIDEO = /\.(mp4|mkv|avi|mov|webm|ts|m4v)$/i;
-      const videos = files.map((f, i) => ({ f, i })).filter(({ f }) =>
-        VIDEO.test(String(f.path || f.name || f.Path || f.Name || "")));
+      const videos = files.map((f, i) => ({ f, i: Number.isFinite(Number(f.id)) ? Number(f.id) : i }))
+        .filter(({ f }) =>
+          VIDEO.test(String(f.path || f.name || f.Path || f.Name || "")));
       const hint = nameHint.toLowerCase().trim();
       const epM = /s(\d{1,2})[._ -]?e(\d{1,3})/i.exec(hint);
       let pickIdx = -1;
@@ -234,19 +246,19 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
   }).catch(() => {});
   const byteStart = Date.now();
   let hasBytes = false;
-  let lastWritten = 0;
+  let lastStat = null;
   while (Date.now() - byteStart < 45000) {
     const t = await tsGetTorrent(infoHash);
-    lastWritten = Number(t?.bytes_written || 0);
-    if (lastWritten >= 1048576 || (lastWritten > 0 && Number(t?.download_speed || 0) > 0)) {
-      hasBytes = true; break;
-    }
+    lastStat = t;
+    if (tsReady(t)) { hasBytes = true; break; }
     await new Promise((r) => setTimeout(r, 1500));
   }
   // Never commit a Response we know has no data behind it — the player spins
-  // forever and the engine chain can't recover (observed 2026-11-18: 1891 B =
-  // metadata only, "serving", player stuck). Throw so rqbit/qB get their turn.
-  if (!hasBytes) throw new Error(`torrserver swarm not delivering (${lastWritten}B after 45s preload)`);
+  // forever and the engine chain can't recover (observed 2026-11-18: 800KB
+  // preloaded of a 16MB target at ~10 KB/s). Throw → rqbit/qB take their turn.
+  if (!hasBytes) {
+    throw new Error(`torrserver swarm too slow (preloaded ${lastStat?.preloaded_bytes ?? 0}B of ${lastStat?.preload_size ?? 0} target, ${Math.round(lastStat?.download_speed ?? 0)}B/s after 45s)`);
+  }
   tsWarm().set(infoHash, { fileIdx, at: Date.now() }); // repeat Range requests take the fast path now
   } // end cold path (fileIdx < 0)
 
