@@ -166,8 +166,10 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
   let fileIdx = -1;
   if (warm && Date.now() - warm.at < TS_WARM_TTL) {
     const still = await tsGetTorrent(infoHash);
-    if (still && Number(still.torrent_size) > 0) fileIdx = warm.fileIdx;
-    else tsWarm().delete(infoHash); // janitor deleted it / TorrServer restarted
+    const ok = still && Number(still.torrent_size) > 0 &&
+      (Number(still.bytes_written) >= 1048576 || Number(still.download_speed) > 0);
+    if (ok) fileIdx = warm.fileIdx;
+    else tsWarm().delete(infoHash); // dead swarm / janitor deleted / TorrServer restarted
   }
 
   if (fileIdx < 0) {
@@ -232,18 +234,19 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
   }).catch(() => {});
   const byteStart = Date.now();
   let hasBytes = false;
+  let lastWritten = 0;
   while (Date.now() - byteStart < 45000) {
-    if (Number(meta.bytes_written || 0) > 0) { hasBytes = true; break; }
-    try {
-      const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
-        signal: AbortSignal.timeout(3000),
-      }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const t = (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash);
-      if (t && Number(t.bytes_written || 0) > 0) { hasBytes = true; break; }
-    } catch {}
+    const t = await tsGetTorrent(infoHash);
+    lastWritten = Number(t?.bytes_written || 0);
+    if (lastWritten >= 1048576 || (lastWritten > 0 && Number(t?.download_speed || 0) > 0)) {
+      hasBytes = true; break;
+    }
     await new Promise((r) => setTimeout(r, 1500));
   }
-  if (!hasBytes) console.error(`[stream] TorrServer: no bytes after preload — serving anyway (slow swarm)`);
+  // Never commit a Response we know has no data behind it — the player spins
+  // forever and the engine chain can't recover (observed 2026-11-18: 1891 B =
+  // metadata only, "serving", player stuck). Throw so rqbit/qB get their turn.
+  if (!hasBytes) throw new Error(`torrserver swarm not delivering (${lastWritten}B after 45s preload)`);
   tsWarm().set(infoHash, { fileIdx, at: Date.now() }); // repeat Range requests take the fast path now
   } // end cold path (fileIdx < 0)
 
@@ -266,12 +269,21 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
     clearTimeout(hdrTimer);
   }
   if (res.ok) {
-    return new Response(trackStream(res.body, infoHash), { status: res.status === 206 ? 206 : 200,
-      headers: {
-        "Content-Type": "video/mp4",
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "no-store",
-      } });
+    const out = {
+      "Content-Type": "video/mp4",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "no-store",
+    };
+    // Forward range metadata — a 206 WITHOUT Content-Range makes strict
+    // players (browsers, some TV apps) reject or mis-seek the response.
+    const cr = res.headers.get("content-range");
+    if (cr) out["Content-Range"] = cr;
+    const cl = res.headers.get("content-length");
+    if (cl) out["Content-Length"] = cl;
+    return new Response(trackStream(res.body, infoHash), {
+      status: res.status === 206 ? 206 : 200,
+      headers: out,
+    });
   }
   tsWarm().delete(infoHash); // stale file index or vanished torrent — re-warm next request
   throw new Error(`torrserver returned ${res.status} for file ${fileIdx}`);
