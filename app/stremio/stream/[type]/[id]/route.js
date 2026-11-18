@@ -6,6 +6,7 @@ import { rankStreams } from "@/lib/rankStreams";
 import { showIdFor } from "@/lib/videos";
 import { rqEnsureTorrent } from "@/lib/rqbit";
 import { touchStream } from "@/lib/idleTorrents";
+import { tpbFallbackStreams } from "@/lib/tpb";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,9 @@ export async function OPTIONS() {
 
 /** id → { at, list } — 5-min cache of successful addon stream lookups. */
 const streamCache = new Map();
+
+/** key → ts — when we last ran the TPB fallback for a title and got nothing. */
+const tpbTried = new Map();
 
 /**
  * Scoped pre-fetch: pull the FOCUSED EPISODE (not the season) to disk before
@@ -139,6 +143,35 @@ export async function GET(request, { params }) {
     all = [];
     for (const r of results) if (r.status === "fulfilled") all.push(...r.value);
     if (all.length) streamCache.set(cacheKey, { at: now, list: all });
+  }
+
+  // ---- TPB fallback: Torrentio sometimes drops whole shows ---------------
+  // 2026-11-18: Arthur / SpongeBob / Fear Factor suddenly had ZERO sources on
+  // Torrentio while the packs were alive on TPB at 50+ seeders. When no addon
+  // yields torrent sources, search apibay ourselves and append streams that
+  // rank and pre-warm like any other torrent source. A short negative-cache
+  // keeps a truly-absent title from re-hitting apibay on every request.
+  if (!all.some((s) => s.source === "torrent")) {
+    const fbKey = `${type}|${torrentId}`;
+    const lastTry = tpbTried.get(fbKey) || 0;
+    if (Date.now() - lastTry > 2 * 60 * 1000) {
+      tpbTried.set(fbKey, Date.now());
+      try {
+        const m = /^(tt\d+)(?::(\d{1,2}):(\d{1,3}))?$/.exec(torrentId);
+        const fb = await tpbFallbackStreams({
+          type,
+          ttId: m?.[1] || torrentId,
+          season: m?.[2] ? Number(m[2]) : undefined,
+          episode: m?.[3] ? Number(m[3]) : undefined,
+          base,
+        });
+        if (fb.length) {
+          all.push(...fb.map((s) => ({ ...s, title: `📡 ${s.title}` })));
+          tpbTried.delete(fbKey); // worked — allow again immediately next time
+          console.log(`[stremio] addons came up empty for ${torrentId} — TPB fallback added ${fb.length} sources`);
+        }
+      } catch {}
+    }
   }
 
   // Ranked for the Pi + client (1080p/x264/seeders first), then made absolute
