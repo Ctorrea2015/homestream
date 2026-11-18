@@ -135,9 +135,42 @@ async function ensureTorrServer() {
   return false;
 }
 
+/** globalThis-backed warm cache: infoHash → { fileIdx, at } — survives hot
+ *  reloads; lets repeat Range requests skip the multi-second warm-up. */
+function tsWarm() {
+  const g = globalThis;
+  if (!g.__hsTsWarm) g.__hsTsWarm = new Map();
+  return g.__hsTsWarm;
+}
+const TS_WARM_TTL = 10 * 60 * 1000; // < janitor's 30-min idle delete, so a warm entry never outlives its torrent
+
+/** Current TorrServer entry for a hash, or null (not present / API down). */
+async function tsGetTorrent(infoHash) {
+  try {
+    const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
+      signal: AbortSignal.timeout(3000),
+    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    return (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash) || null;
+  } catch { return null; }
+}
+
 async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = "") {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
+
+  // Fast path — a buffering player fires SEVERAL Range requests back-to-back;
+  // re-running the whole warm-up (1s sleep + polls) for each one stalled
+  // playback (2026-11-18). If this hash was warmed recently and its torrent
+  // is still loaded, reuse the picked file index (one stats fetch instead).
+  const warm = tsWarm().get(infoHash);
+  let fileIdx = -1;
+  if (warm && Date.now() - warm.at < TS_WARM_TTL) {
+    const still = await tsGetTorrent(infoHash);
+    if (still && Number(still.torrent_size) > 0) fileIdx = warm.fileIdx;
+    else tsWarm().delete(infoHash); // janitor deleted it / TorrServer restarted
+  }
+
+  if (fileIdx < 0) {
   // Register as a MAGNET LINK with trackers + display name — a bare hash gets
   // no tracker announcements, so the swarm stays at 0 peers and metadata never
   // loads (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
@@ -161,19 +194,15 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
   const warmStart = Date.now();
   let meta = null;
   while (Date.now() - warmStart < 90000) {
-    try {
-      const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
-        signal: AbortSignal.timeout(3000),
-      }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const t = (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash);
-      if (t && Number(t.torrent_size) > 0) { meta = t; break; }
-    } catch {}
+    meta = await tsGetTorrent(infoHash);
+    if (meta && Number(meta.torrent_size) > 0) break;
+    meta = null;
     await new Promise((r) => setTimeout(r, 1500));
   }
   if (!meta) throw new Error("torrserver metadata not ready after 90s (dead swarm)");
   // Phase 2 — pick the RIGHT file: fetch the file list and match the name
   // hint (S01E02 etc.). Hardcoding index 0 hit 404s / wrong files in packs.
-  let fileIdx = 0;
+  fileIdx = 0;
   try {
     const det = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}`, {
       signal: AbortSignal.timeout(5000),
@@ -215,21 +244,36 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
     await new Promise((r) => setTimeout(r, 1500));
   }
   if (!hasBytes) console.error(`[stream] TorrServer: no bytes after preload — serving anyway (slow swarm)`);
+  tsWarm().set(infoHash, { fileIdx, at: Date.now() }); // repeat Range requests take the fast path now
+  } // end cold path (fileIdx < 0)
+
   const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/${fileIdx}`;
-  // Stream from TorrServer — it serves Range requests from RAM cache
+  // Stream from TorrServer — it serves Range requests from RAM cache.
+  // Timeout guards HEADERS only: AbortSignal.timeout(120000) also kills the
+  // response BODY at the 2-minute mark, ending every movie mid-playback
+  // (observed 2026-11-18). Clear it once fetch resolves; the body then lives
+  // until the client disconnects (which cancels res.body and aborts upstream).
+  const ac = new AbortController();
+  const hdrTimer = setTimeout(() => ac.abort(), 120000);
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
-  const res = await fetch(streamUrl, {
-    headers: { ...H, ...(rangeHeader ? { Range: rangeHeader } : {} ) },
-    signal: AbortSignal.timeout(120000),
-  });
+  let res;
+  try {
+    res = await fetch(streamUrl, {
+      headers: { ...H, ...(rangeHeader ? { Range: rangeHeader } : {} ) },
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(hdrTimer);
+  }
   if (res.ok) {
-    return new Response(res.body, { status: res.status === 206 ? 206 : 200,
+    return new Response(trackStream(res.body, infoHash), { status: res.status === 206 ? 206 : 200,
       headers: {
         "Content-Type": "video/mp4",
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-store",
       } });
   }
+  tsWarm().delete(infoHash); // stale file index or vanished torrent — re-warm next request
   throw new Error(`torrserver returned ${res.status} for file ${fileIdx}`);
 }
 
