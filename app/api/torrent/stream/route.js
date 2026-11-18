@@ -135,14 +135,18 @@ async function ensureTorrServer() {
   return false;
 }
 
-async function tryTorrServer(infoHash, rangeHeader) {
+async function tryTorrServer(infoHash, rangeHeader, trackers = []) {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
-  // Register the torrent infoHash via POST (non-fatal if already registered)
+  // Register as a MAGNET LINK with trackers — a bare hash gets no tracker
+  // announcements, so the swarm stays at 0 peers and metadata never loads
+  // (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
+  const magnet = `magnet:?xt=urn:btih:${infoHash}` +
+    trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
   await fetch(`http://127.0.0.1:8090/api/torrents`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
-    body: JSON.stringify({ link: infoHash }),
+    body: JSON.stringify({ link: magnet }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1000));
@@ -155,20 +159,24 @@ async function tryTorrServer(infoHash, rangeHeader) {
   await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/0/preload`, {
     method: "POST", signal: AbortSignal.timeout(5000),
   }).catch(() => {});
-  // Poll cache status up to 30s for first bytes
+  // Poll torrent stats up to 45s: metadata loaded (torrent_size>0) AND some
+  // bytes written. Serving before that = player freezes (TorrServer test, 2026-11-18).
   const warmStart = Date.now();
   let warmed = false;
-  while (Date.now() - warmStart < 30000) {
+  while (Date.now() - warmStart < 45000) {
     try {
-      const st = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/cache`, {
+      const list = await fetch(`http://127.0.0.1:8090/api/torrents`, {
         signal: AbortSignal.timeout(3000),
       }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const cached = Number(st?.preloaded_bytes ?? st?.cached ?? st?.bytes ?? 0);
-      if (cached > 0) { warmed = true; break; }
+      const t = (list?.torrents || []).find((x) => String(x.hash).toLowerCase() === infoHash);
+      if (t && Number(t.torrent_size) > 0 && Number(t.bytes_written) > 0) {
+        warmed = true;
+        break;
+      }
     } catch {}
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1500));
   }
-  if (!warmed) console.error(`[stream] TorrServer: no cached bytes after 30s — serving anyway (weak swarm?)`);
+  if (!warmed) console.error(`[stream] TorrServer: metadata/bytes not ready after 45s — serving anyway (weak swarm?)`);
   const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/0`;
   // Stream from TorrServer — it serves Range requests from RAM cache
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
@@ -199,8 +207,8 @@ async function tryTorrServer(infoHash, rangeHeader) {
  * binary is available via HS_TORRSERVER_BIN.
  */
 /** Serve a byte range out of a TorrServer-served torrent. */
-async function serveFromTorrServer(infoHash, rangeHeader) {
-  const resp = await tryTorrServer(infoHash, rangeHeader);
+async function serveFromTorrServer(infoHash, rangeHeader, trackers) {
+  const resp = await tryTorrServer(infoHash, rangeHeader, trackers);
   return resp; // Response on success, throws on failure
 }
 
@@ -244,7 +252,7 @@ export async function GET(request) {
 
   // ---- Engine 1: TorrServer (RAM-cache, instant start) -----------------------
   try {
-    const resp = await serveFromTorrServer(infoHash, rangeHeader);
+    const resp = await serveFromTorrServer(infoHash, rangeHeader, sp.getAll("tr"));
     if (resp) {
       console.log(`[stream] TorrServer engine serving ${infoHash.slice(0, 8)}… (RAM cache)`);
       return resp;
