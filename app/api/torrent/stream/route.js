@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
-import { qbEnsureTorrent, qbReadRange, qbAvailable, qbTorrentProgress } from "@/lib/qbittorrent";
+import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqAvailable, rqWaitForData } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
