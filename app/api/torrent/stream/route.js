@@ -89,49 +89,67 @@ async function serveFromQb(q, rangeHeader) {
   return new Response(trackStream(node, q.qbHash || ""), { status: 206, headers });
 }
 
-/** ---- Engine 4: TorrServer (lightweight torrent→HTTP proxy, RAM cache) ---- */
-/** Try TorrServer after rqbit/qBittorrent fail; if binary not on PATH/config,
- *  this engine silently falls through to webtorrent. */
-async function tryTorrServer(infoHash, rangeHeader) {
-  const binary = process.env.HS_TORRSERVER_BIN || "torrserver";
-  let proc;
+/** ---- Engine 1: TorrServer (lightweight torrent→HTTP proxy, RAM cache) ---- */
+/** Reuse an already-running TorrServer, or spawn one. Returns true if the
+ *  HTTP API answers on 127.0.0.1:8081. */
+let tsProc = null; // module-level: one shared TorrServer process
+async function ensureTorrServer() {
+  // Already running?
   try {
-    // Start torrserver with HTTP API
-    proc = await exec(`"${binary}" --http-api-port 8081`, {
+    const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(2000) });
+    if (probe.ok || probe.status === 404) return true; // API is up
+  } catch {}
+  // Spawn it (detached — survives independently of this request)
+  const binary = process.env.HS_TORRSERVER_BIN || "torrserver";
+  try {
+    const { spawn } = await import("node:child_process");
+    tsProc = spawn(binary, ["--http-api-port", "8081"], {
+      detached: true,
+      stdio: "ignore",
       windowsHide: true,
-      timeout: 5000,
     });
-    await new Promise((r) => setTimeout(r, 2000));
-    // Register the torrent infoHash via POST
-    await fetch(`http://127.0.0.1:8081/torrents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
-      body: JSON.stringify({ infoHash }),
-      signal: AbortSignal.timeout(10000),
-    }).catch(() => {}); // non-fatal if registration fails
-    await new Promise((r) => setTimeout(r, 1000));
-    const streamUrl = `http://127.0.0.1:8081/torrents/${infoHash}`;
-    // Stream from TorrServer — it serves Range requests from RAM cache
-    const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
-    const res = await fetch(streamUrl, {
-      headers: { ...H, ...(rangeHeader ? { Range: rangeHeader } : {} ) },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (res.ok) {
-      return new Response(res.body, { status: res.status === 206 ? 206 : 200,
-        headers: {
-          "Content-Type": "video/mp4",
-          "Accept-Ranges": "bytes",
-          "Cache-Control": "no-store",
-        } });
+    tsProc.unref();
+    // Wait for the API to come up (max 8s)
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(1500) });
+        if (probe.ok || probe.status === 404) return true;
+      } catch {}
     }
-    // If not ok, throw so the caller can fall through
-    throw new Error(`torrserver returned ${res.status}`);
-  } catch (e) {
-    // torrserver not available or failed — caller will fall through
-    if (proc) proc.kill().catch(() => {});
-    throw e;
+    return false;
+  } catch {
+    return false;
   }
+}
+
+async function tryTorrServer(infoHash, rangeHeader) {
+  const up = await ensureTorrServer();
+  if (!up) throw new Error("torrserver binary not found or API not responding");
+  // Register the torrent infoHash via POST (non-fatal if already registered)
+  await fetch(`http://127.0.0.1:8081/torrents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
+    body: JSON.stringify({ infoHash }),
+    signal: AbortSignal.timeout(10000),
+  }).catch(() => {});
+  await new Promise((r) => setTimeout(r, 1000));
+  const streamUrl = `http://127.0.0.1:8081/torrents/${infoHash}`;
+  // Stream from TorrServer — it serves Range requests from RAM cache
+  const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
+  const res = await fetch(streamUrl, {
+    headers: { ...H, ...(rangeHeader ? { Range: rangeHeader } : {} ) },
+    signal: AbortSignal.timeout(120000),
+  });
+  if (res.ok) {
+    return new Response(res.body, { status: res.status === 206 ? 206 : 200,
+      headers: {
+        "Content-Type": "video/mp4",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      } });
+  }
+  throw new Error(`torrserver returned ${res.status}`);
 }
 
 /** GET /api/torrent/stream?infoHash=<40-hex> — proxies a BitTorrent file as
@@ -147,13 +165,8 @@ async function tryTorrServer(infoHash, rangeHeader) {
  */
 /** Serve a byte range out of a TorrServer-served torrent. */
 async function serveFromTorrServer(infoHash, rangeHeader) {
-  try {
-    const resp = await tryTorrServer(infoHash, rangeHeader);
-    return resp;
-  } catch {
-    // fallback — no return, caller will try next engine
-    throw new Error("torrserver unavailable");
-  }
+  const resp = await tryTorrServer(infoHash, rangeHeader);
+  return resp; // Response on success, throws on failure
 }
 
 /** Engine decision: try each engine in order, returning the first successful Response. */
@@ -197,9 +210,13 @@ export async function GET(request) {
   // ---- Engine 1: TorrServer (RAM-cache, instant start) -----------------------
   try {
     const resp = await serveFromTorrServer(infoHash, rangeHeader);
-    return resp;
-  } catch {
-    // torrserver not available — fall through to rqbit
+    if (resp) {
+      console.log(`[stream] TorrServer engine serving ${infoHash.slice(0, 8)}… (RAM cache)`);
+      return resp;
+    }
+    throw new Error("no response");
+  } catch (e) {
+    console.error(`[stream] TorrServer engine failed (${String(e).slice(0, 150)}) — trying rqbit`);
   }
 
   // ---- Engine 2: rqbit (librqbit) — fallback ----------------------------------
