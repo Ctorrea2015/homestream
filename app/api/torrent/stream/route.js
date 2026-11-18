@@ -9,8 +9,8 @@ import { touchStream, openStream, closeStream } from "@/lib/idleTorrents";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Space floor: refuse new torrents when free space is below this. Writing
- *  to a 100%-full SD card is how the fs bitmap got corrupted (2026-11-13). */
+/** Space floor: refuse new torrents when free space is below this.
+ *  Writing to a 100%-full SD card is how the fs bitmap got corrupted (2026-11-13). */
 const MIN_FREE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 
 async function freeSpaceBytes() {
@@ -51,20 +51,13 @@ const MIME = {
   ".ts": "video/mp2t", ".flv": "video/x-flv", ".mpg": "video/mpeg", ".wmv": "video/x-ms-wmv",
 };
 
-/**
- * Pull the head and tail of the focused file through rqbit's stream endpoint.
- * rqbit downloads pieces on demand — HTTP reads act as prioritization hints.
- * A player needs the FILE HEAD (start) and the TAIL (mkv seek index/cues);
- * without this, "any bytes fetched" can be the tail (from an earlier probe)
- * while the head starves and playback never starts (Fear Factor ep3,
- * 2026-11-16: end-range served instantly, start-range hung forever).
- */
+/** Pull the head and tail of the focused file through rqbit's stream endpoint. */
 async function warmHeadTail(streamUrl, size) {
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
   const grab = async (range) => {
     try {
       const res = await fetch(streamUrl, { headers: { ...H, Range: range }, signal: AbortSignal.timeout(120000) });
-      if (res.ok || res.status === 206) await res.arrayBuffer(); // pull the bytes through
+      if (res.ok || res.status === 206) await res.arrayBuffer();
       else await res.body?.cancel();
     } catch {}
   };
@@ -75,20 +68,10 @@ async function warmHeadTail(streamUrl, size) {
   ]);
 }
 
-/**
- * GET /api/torrent/stream?infoHash=<40-hex> — proxies a BitTorrent file as
- * chunkable HTTP video (206 Range requests), exactly like Stremio's local
- * stream server. First play needs swarm peers, so it can take a while to
- * reach playable speed; browsers just see a normal byte stream.
- *
- * Engine order: qBittorrent (if configured in .data/qbittorrent.json) is the
- * preferred engine — sequential downloading makes streaming fast. webtorrent
- * (in-process) is the automatic fallback when qB isn't configured/working.
- */
 /** Serve a byte range out of a qB-downloaded file (shared by the fallback
  *  engine and the qB pre-check short-circuit). */
 async function serveFromQb(q, rangeHeader) {
-  touchStream(q.qbHash || ""); // ledger: a client is reading this torrent
+  touchStream(q.qbHash || "");
   const ext = path.extname(q.name).toLowerCase();
   const headers = {
     "Content-Type": MIME[ext] || "application/octet-stream",
@@ -106,6 +89,74 @@ async function serveFromQb(q, rangeHeader) {
   return new Response(trackStream(node, q.qbHash || ""), { status: 206, headers });
 }
 
+/** ---- Engine 4: TorrServer (lightweight torrent→HTTP proxy, RAM cache) ---- */
+/** Try TorrServer after rqbit/qBittorrent fail; if binary not on PATH/config,
+ *  this engine silently falls through to webtorrent. */
+async function tryTorrServer(infoHash, rangeHeader) {
+  const binary = process.env.HS_TORRSERVER_BIN || "torrserver";
+  let proc;
+  try {
+    // Start torrserver with HTTP API
+    proc = await exec(`"${binary}" --http-api-port 8081`, {
+      windowsHide: true,
+      timeout: 5000,
+    });
+    await new Promise((r) => setTimeout(r, 2000));
+    // Register the torrent infoHash via POST
+    await fetch(`http://127.0.0.1:8081/torrents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
+      body: JSON.stringify({ infoHash }),
+      signal: AbortSignal.timeout(10000),
+    }).catch(() => {}); // non-fatal if registration fails
+    await new Promise((r) => setTimeout(r, 1000));
+    const streamUrl = `http://127.0.0.1:8081/torrents/${infoHash}`;
+    // Stream from TorrServer — it serves Range requests from RAM cache
+    const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
+    const res = await fetch(streamUrl, {
+      headers: { ...H, ...(rangeHeader ? { Range: rangeHeader } : {} ) },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (res.ok) {
+      return new Response(res.body, { status: res.status === 206 ? 206 : 200,
+        headers: {
+          "Content-Type": "video/mp4",
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "no-store",
+        } });
+    }
+    // If not ok, throw so the caller can fall through
+    throw new Error(`torrserver returned ${res.status}`);
+  } catch (e) {
+    // torrserver not available or failed — caller will fall through
+    if (proc) proc.kill().catch(() => {});
+    throw e;
+  }
+}
+
+/** GET /api/torrent/stream?infoHash=<40-hex> — proxies a BitTorrent file as
+ * chunkable HTTP video (206 Range requests), exactly like Stremio's local
+ * stream server. First play needs swarm peers, so it can take a while to
+ * reach playable speed; browsers just see a normal byte stream.
+ *
+ * Engine order: qBittorrent (if configured in .data/qbittorrent.json) is the
+ * preferred engine — sequential downloading makes streaming fast. webtorrent
+ * (in-process) is the automatic fallback when qB isn't configured/working.
+ * TorrServer (RAM-cache, instant start) is tried before webtorrent if the
+ * binary is available via HS_TORRSERVER_BIN.
+ */
+/** Serve a byte range out of a TorrServer-served torrent. */
+async function serveFromTorrServer(infoHash, rangeHeader) {
+  try {
+    const resp = await tryTorrServer(infoHash, rangeHeader);
+    return resp;
+  } catch {
+    // fallback — no return, caller will try next engine
+    throw new Error("torrserver unavailable");
+  }
+}
+
+/** Engine decision: try each engine in order, returning the first successful Response. */
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const infoHash = ((sp.get("infoHash")) || "").toLowerCase();
@@ -200,7 +251,15 @@ export async function GET(request) {
     console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
   }
 
-  // ---- Engine 3: webtorrent ---------------------------------------------------
+  // ---- Engine 3: TorrServer (RAM-cache, instant start) -----------------------
+  try {
+    const resp = await serveFromTorrServer(infoHash, rangeHeader);
+    return resp;
+  } catch {
+    // torrserver not available — fall through to webtorrent
+  }
+
+  // ---- Engine 4: webtorrent ---------------------------------------------------
   if (!(await qbAvailable())) console.log("[stream] qbittorrent not configured — using webtorrent engine");
   let t, pick;
   try {
