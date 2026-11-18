@@ -139,14 +139,14 @@ async function tryTorrServer(infoHash, rangeHeader) {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
   // Register the torrent infoHash via POST (non-fatal if already registered)
-  await fetch(`http://127.0.0.1:8090/torrents`, {
+  await fetch(`http://127.0.0.1:8090/api/torrents`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
-    body: JSON.stringify({ infoHash }),
+    body: JSON.stringify({ link: infoHash }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1000));
-  const streamUrl = `http://127.0.0.1:8090/torrents/${infoHash}`;
+  const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/0`;
   // Stream from TorrServer — it serves Range requests from RAM cache
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
   const res = await fetch(streamUrl, {
