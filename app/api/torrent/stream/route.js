@@ -99,28 +99,40 @@ async function ensureTorrServer() {
     const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(2000) });
     if (probe.ok || probe.status === 404) return true; // API is up
   } catch {}
-  // Spawn it (detached — survives independently of this request)
-  const binary = process.env.HS_TORRSERVER_BIN || "torrserver";
-  try {
-    const { spawn } = await import("node:child_process");
-    tsProc = spawn(binary, ["--http-api-port", "8081"], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    tsProc.unref();
-    // Wait for the API to come up (max 8s)
-    for (let i = 0; i < 16; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(1500) });
-        if (probe.ok || probe.status === 404) return true;
-      } catch {}
-    }
-    return false;
-  } catch {
-    return false;
+  // Spawn it (detached — survives independently of this request).
+  // systemd services don't read /etc/environment and have a minimal PATH,
+  // so try the explicit install path first, then PATH.
+  const candidates = [
+    process.env.HS_TORRSERVER_BIN,
+    "/usr/local/bin/torrserver",
+    "/usr/bin/torrserver",
+    "torrserver",
+  ].filter(Boolean);
+  const { spawn } = await import("node:child_process");
+  let spawned = false;
+  for (const binary of candidates) {
+    try {
+      tsProc = spawn(binary, ["--http-api-port", "8081"], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      tsProc.on("error", () => {}); // ignore ENOENT from wrong candidate
+      tsProc.unref();
+      spawned = true;
+      break;
+    } catch {}
   }
+  if (!spawned) return false;
+  // Wait for the API to come up (max 8s)
+  for (let i = 0; i < 16; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(1500) });
+      if (probe.ok || probe.status === 404) return true;
+    } catch {}
+  }
+  return false;
 }
 
 async function tryTorrServer(infoHash, rangeHeader) {
