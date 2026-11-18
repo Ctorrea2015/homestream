@@ -194,7 +194,15 @@ export async function GET(request) {
     }
   } catch {}
 
-  // ---- Engine 1: rqbit (librqbit) — the lightweight primary -------------------
+  // ---- Engine 1: TorrServer (RAM-cache, instant start) -----------------------
+  try {
+    const resp = await serveFromTorrServer(infoHash, rangeHeader);
+    return resp;
+  } catch {
+    // torrserver not available — fall through to rqbit
+  }
+
+  // ---- Engine 2: rqbit (librqbit) — fallback ----------------------------------
   const trackers = sp.getAll("tr"); // addon-injected trackers (Stremio's trick)
   try {
     const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
@@ -240,7 +248,7 @@ export async function GET(request) {
     console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — trying qBittorrent`);
   }
 
-  // ---- Engine 2: qBittorrent (proven fallback) --------------------------------
+  // ---- Engine 3: qBittorrent (proven fallback) --------------------------------
   try {
     const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
     if (q) {
@@ -249,14 +257,6 @@ export async function GET(request) {
     }
   } catch (e) {
     console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
-  }
-
-  // ---- Engine 3: TorrServer (RAM-cache, instant start) -----------------------
-  try {
-    const resp = await serveFromTorrServer(infoHash, rangeHeader);
-    return resp;
-  } catch {
-    // torrserver not available — fall through to webtorrent
   }
 
   // ---- Engine 4: webtorrent ---------------------------------------------------
