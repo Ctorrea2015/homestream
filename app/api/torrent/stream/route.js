@@ -112,7 +112,7 @@ async function ensureTorrServer() {
   let spawned = false;
   for (const binary of candidates) {
     try {
-      tsProc = spawn(binary, ["--http-api-port", "8081"], {
+      tsProc = spawn(binary, ["-port", "8081"], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
