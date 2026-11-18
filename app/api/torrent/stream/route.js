@@ -144,6 +144,25 @@ function tsWarm() {
 }
 const TS_WARM_TTL = 10 * 60 * 1000; // < janitor's 30-min idle delete, so a warm entry never outlives its torrent
 
+/** Negative cache: infoHash → { at, err }. Without it every player retry
+ *  re-runs the full 90s+45s warm-up on a dead swarm (six parallel 90s waits
+ *  in one minute — observed 2026-11-18 13:57). Fail fast for 2 min instead. */
+function tsFail() {
+  const g = globalThis;
+  if (!g.__hsTsFail) g.__hsTsFail = new Map();
+  return g.__hsTsFail;
+}
+const TS_FAIL_TTL = 2 * 60 * 1000;
+
+/** Singleflight: infoHash → in-flight warm-up Promise. Concurrent Range
+ *  requests for the same torrent share ONE warm-up loop instead of each
+ *  stacking its own 90s metadata + 45s byte polls. */
+function tsInflight() {
+  const g = globalThis;
+  if (!g.__hsTsInflight) g.__hsTsInflight = new Map();
+  return g.__hsTsInflight;
+}
+
 /** Current TorrServer entry for a hash, or null (not present / API down). */
 async function tsGetTorrent(infoHash) {
   try {
@@ -164,6 +183,98 @@ function tsReady(t) {
     Number(t.download_speed || 0) >= 200000;
 }
 
+/** Cold-path warm-up, shared across concurrent requests via tsInflight():
+ *  register → wake → wait metadata (90s) → pick file → preload → wait for
+ *  real bytes (45s). Returns fileIdx. Records failures in tsFail() so the
+ *  next request fails fast instead of repeating 135s of polling. */
+async function tsWarmUp(infoHash, trackers, nameHint) {
+  const magnet = `magnet:?xt=urn:btih:${infoHash}` +
+    (nameHint ? `&dn=${encodeURIComponent(nameHint.trim())}` : "") +
+    trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
+  try {
+    // Register as a MAGNET LINK with trackers + display name — a bare hash gets
+    // no tracker announcements, so the swarm stays at 0 peers and metadata never
+    // loads (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
+    await fetch(`http://127.0.0.1:8090/api/torrents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
+      body: JSON.stringify({ link: magnet }),
+      signal: AbortSignal.timeout(10000),
+    }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1000));
+    // Wake the torrent so metadata resolution starts immediately.
+    await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/wake`, {
+      method: "POST", signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+    // Phase 1 — wait for METADATA (torrent_size > 0). Without it the file list
+    // is empty and /api/stream/{hash}/{idx} returns 404 (observed 2026-11-18:
+    // swarm delivered metadata ~60s in, after our 45s warm-up had given up).
+    const warmStart = Date.now();
+    let meta = null;
+    while (Date.now() - warmStart < 90000) {
+      meta = await tsGetTorrent(infoHash);
+      if (meta && Number(meta.torrent_size) > 0) break;
+      meta = null;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (!meta) throw new Error("metadata not ready after 90s (dead swarm)");
+    // Phase 2 — pick the RIGHT file: fetch the file list and match the name
+    // hint (S01E02 etc.). Hardcoding index 0 hit 404s / wrong files in packs.
+    let fileIdx = 0;
+    try {
+      const det = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}`, {
+        signal: AbortSignal.timeout(5000),
+      }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      // This build exposes the list as `file_stats` (id/path/name/length) — the
+      // old files/file_list/FileList lookup never matched, so we always served
+      // index 0 (Episode 01) no matter which episode was picked (2026-11-18).
+      const files = det?.file_stats || det?.files || det?.file_list || det?.FileList || [];
+      if (files.length) {
+        const VIDEO = /\.(mp4|mkv|avi|mov|webm|ts|m4v)$/i;
+        const videos = files.map((f, i) => ({ f, i: Number.isFinite(Number(f.id)) ? Number(f.id) : i }))
+          .filter(({ f }) =>
+            VIDEO.test(String(f.path || f.name || f.Path || f.Name || "")));
+        const hint = nameHint.toLowerCase().trim();
+        const epM = /s(\d{1,2})[._ -]?e(\d{1,3})/i.exec(hint);
+        let pickIdx = -1;
+        if (epM) {
+          const tag = `s${String(Number(epM[1])).padStart(2, "0")}e${String(Number(epM[2])).padStart(2, "0")}`;
+          pickIdx = videos.find(({ f }) =>
+            String(f.path || f.name || f.Path || f.Name || "").toLowerCase().replace(/[._ -]/g, "")
+              .includes(tag.replace(/[._ -]/g, "")))?.i ?? -1;
+        }
+        if (pickIdx < 0 && videos.length) pickIdx = videos[0].i; // first video file
+        if (pickIdx >= 0) fileIdx = pickIdx;
+      }
+    } catch {}
+    // Phase 3 — preload the chosen file and wait for first bytes so the player
+    // doesn't freeze on an empty RAM cache.
+    await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/${fileIdx}/preload`, {
+      method: "POST", signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+    const byteStart = Date.now();
+    let lastStat = null;
+    while (Date.now() - byteStart < 45000) {
+      const t = await tsGetTorrent(infoHash);
+      lastStat = t;
+      if (tsReady(t)) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (!tsReady(lastStat)) {
+      // Never commit a Response we know has no data behind it — the player
+      // spins forever and the engine chain can't recover (observed 2026-11-18:
+      // 800KB preloaded of a 16MB target at ~10 KB/s). Throw → rqbit/qB turn.
+      throw new Error(`swarm too slow (preloaded ${lastStat?.preloaded_bytes ?? 0}B of ${lastStat?.preload_size ?? 0} target, ${Math.round(lastStat?.download_speed ?? 0)}B/s after 45s)`);
+    }
+    tsWarm().set(infoHash, { fileIdx, at: Date.now() }); // repeat Range requests take the fast path now
+    tsFail().delete(infoHash); // healthy now — clear any old negative entry
+    return fileIdx;
+  } catch (e) {
+    tsFail().set(infoHash, { at: Date.now(), err: String(e?.message || e).slice(0, 120) });
+    throw e;
+  }
+}
+
 async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = "") {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
@@ -180,87 +291,27 @@ async function tryTorrServer(infoHash, rangeHeader, trackers = [], nameHint = ""
     else tsWarm().delete(infoHash); // dead swarm / janitor deleted / TorrServer restarted
   }
 
+  // Negative cache — this hash just failed (dead swarm / too slow): don't
+  // burn another 90s+45s on it, hand the request straight to rqbit/qB.
+  // (Only relevant when the warm fast-path didn't already give us a fileIdx.)
   if (fileIdx < 0) {
-  // Register as a MAGNET LINK with trackers + display name — a bare hash gets
-  // no tracker announcements, so the swarm stays at 0 peers and metadata never
-  // loads (stat:0, torrent_size:0 — TorrServer test, 2026-11-18).
-  const magnet = `magnet:?xt=urn:btih:${infoHash}` +
-    (nameHint ? `&dn=${encodeURIComponent(nameHint.trim())}` : "") +
-    trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
-  await fetch(`http://127.0.0.1:8090/api/torrents`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
-    body: JSON.stringify({ link: magnet }),
-    signal: AbortSignal.timeout(10000),
-  }).catch(() => {});
-  await new Promise((r) => setTimeout(r, 1000));
-  // Wake the torrent so metadata resolution starts immediately.
-  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/wake`, {
-    method: "POST", signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
-  // Phase 1 — wait for METADATA (torrent_size > 0). Without it the file list
-  // is empty and /api/stream/{hash}/{idx} returns 404 (observed 2026-11-18:
-  // swarm delivered metadata ~60s in, after our 45s warm-up had given up).
-  const warmStart = Date.now();
-  let meta = null;
-  while (Date.now() - warmStart < 90000) {
-    meta = await tsGetTorrent(infoHash);
-    if (meta && Number(meta.torrent_size) > 0) break;
-    meta = null;
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-  if (!meta) throw new Error("torrserver metadata not ready after 90s (dead swarm)");
-  // Phase 2 — pick the RIGHT file: fetch the file list and match the name
-  // hint (S01E02 etc.). Hardcoding index 0 hit 404s / wrong files in packs.
-  fileIdx = 0;
-  try {
-    const det = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}`, {
-      signal: AbortSignal.timeout(5000),
-    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    // This build exposes the list as `file_stats` (id/path/name/length) — the
-    // old files/file_list/FileList lookup never matched, so we always served
-    // index 0 (Episode 01) no matter which episode was picked (2026-11-18).
-    const files = det?.file_stats || det?.files || det?.file_list || det?.FileList || [];
-    if (files.length) {
-      const VIDEO = /\.(mp4|mkv|avi|mov|webm|ts|m4v)$/i;
-      const videos = files.map((f, i) => ({ f, i: Number.isFinite(Number(f.id)) ? Number(f.id) : i }))
-        .filter(({ f }) =>
-          VIDEO.test(String(f.path || f.name || f.Path || f.Name || "")));
-      const hint = nameHint.toLowerCase().trim();
-      const epM = /s(\d{1,2})[._ -]?e(\d{1,3})/i.exec(hint);
-      let pickIdx = -1;
-      if (epM) {
-        const tag = `s${String(Number(epM[1])).padStart(2, "0")}e${String(Number(epM[2])).padStart(2, "0")}`;
-        pickIdx = videos.find(({ f }) =>
-          String(f.path || f.name || f.Path || f.Name || "").toLowerCase().replace(/[._ -]/g, "")
-            .includes(tag.replace(/[._ -]/g, "")))?.i ?? -1;
-      }
-      if (pickIdx < 0 && videos.length) pickIdx = videos[0].i; // first video file
-      if (pickIdx >= 0) fileIdx = pickIdx;
+    const fail = tsFail().get(infoHash);
+    if (fail && Date.now() - fail.at < TS_FAIL_TTL) {
+      throw new Error(`torrserver recently failed (${fail.err})`);
     }
-  } catch {}
-  // Phase 3 — preload the chosen file and wait for first bytes so the player
-  // doesn't freeze on an empty RAM cache.
-  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/${fileIdx}/preload`, {
-    method: "POST", signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
-  const byteStart = Date.now();
-  let hasBytes = false;
-  let lastStat = null;
-  while (Date.now() - byteStart < 45000) {
-    const t = await tsGetTorrent(infoHash);
-    lastStat = t;
-    if (tsReady(t)) { hasBytes = true; break; }
-    await new Promise((r) => setTimeout(r, 1500));
   }
-  // Never commit a Response we know has no data behind it — the player spins
-  // forever and the engine chain can't recover (observed 2026-11-18: 800KB
-  // preloaded of a 16MB target at ~10 KB/s). Throw → rqbit/qB take their turn.
-  if (!hasBytes) {
-    throw new Error(`torrserver swarm too slow (preloaded ${lastStat?.preloaded_bytes ?? 0}B of ${lastStat?.preload_size ?? 0} target, ${Math.round(lastStat?.download_speed ?? 0)}B/s after 45s)`);
+
+  if (fileIdx < 0) {
+    // Singleflight — the player's retry storm (6 parallel requests observed)
+    // shares ONE warm-up instead of each running its own 135s of polling.
+    let pending = tsInflight().get(infoHash);
+    if (!pending) {
+      pending = tsWarmUp(infoHash, trackers, nameHint);
+      tsInflight().set(infoHash, pending);
+      pending.catch(() => {}).finally(() => tsInflight().delete(infoHash));
+    }
+    fileIdx = await pending; // shared result — or shared rejection
   }
-  tsWarm().set(infoHash, { fileIdx, at: Date.now() }); // repeat Range requests take the fast path now
-  } // end cold path (fileIdx < 0)
 
   const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/${fileIdx}`;
   // Stream from TorrServer — it serves Range requests from RAM cache.
