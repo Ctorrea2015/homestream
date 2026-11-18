@@ -91,12 +91,12 @@ async function serveFromQb(q, rangeHeader) {
 
 /** ---- Engine 1: TorrServer (lightweight torrent→HTTP proxy, RAM cache) ---- */
 /** Reuse an already-running TorrServer, or spawn one. Returns true if the
- *  HTTP API answers on 127.0.0.1:8081. */
+ *  HTTP API answers on 127.0.0.1:8090. */
 let tsProc = null; // module-level: one shared TorrServer process
 async function ensureTorrServer() {
   // Already running?
   try {
-    const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(2000) });
+    const probe = await fetch("http://127.0.0.1:8090/", { signal: AbortSignal.timeout(2000) });
     if (probe.ok || probe.status === 404) return true; // API is up
   } catch {}
   // Spawn it (detached — survives independently of this request).
@@ -112,7 +112,7 @@ async function ensureTorrServer() {
   let spawned = false;
   for (const binary of candidates) {
     try {
-      tsProc = spawn(binary, ["-port", "8081"], {
+      tsProc = spawn(binary, ["-c", `${process.env.HOME || "/home/ctorres19956"}/config.yaml`], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -128,7 +128,7 @@ async function ensureTorrServer() {
   for (let i = 0; i < 16; i++) {
     await new Promise((r) => setTimeout(r, 500));
     try {
-      const probe = await fetch("http://127.0.0.1:8081/", { signal: AbortSignal.timeout(1500) });
+      const probe = await fetch("http://127.0.0.1:8090/", { signal: AbortSignal.timeout(1500) });
       if (probe.ok || probe.status === 404) return true;
     } catch {}
   }
@@ -139,14 +139,14 @@ async function tryTorrServer(infoHash, rangeHeader) {
   const up = await ensureTorrServer();
   if (!up) throw new Error("torrserver binary not found or API not responding");
   // Register the torrent infoHash via POST (non-fatal if already registered)
-  await fetch(`http://127.0.0.1:8081/torrents`, {
+  await fetch(`http://127.0.0.1:8090/torrents`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": "HomeStream/1.0" },
     body: JSON.stringify({ infoHash }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1000));
-  const streamUrl = `http://127.0.0.1:8081/torrents/${infoHash}`;
+  const streamUrl = `http://127.0.0.1:8090/torrents/${infoHash}`;
   // Stream from TorrServer — it serves Range requests from RAM cache
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
   const res = await fetch(streamUrl, {
