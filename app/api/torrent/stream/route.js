@@ -108,6 +108,16 @@ export async function GET(request) {
   if (!/^[a-f0-9]{40}$/.test(infoHash)) {
     return NextResponse.json({ error: "Provide a valid 40-char infoHash" }, { status: 400 });
   }
+  // ?engine=<rqbit|qb|webtorrent> — force ONE engine (diagnostic override).
+  // Without it the chain runs in order. With it, only that engine is tried and
+  // a failure returns 504 instead of falling through, so a test proves which
+  // engine actually delivers bytes on a given source (2026-11-18: webtorrent
+  // is Engine 3 but had never been reached in isolation).
+  const engine = (sp.get("engine") || "").toLowerCase();
+  if (engine && !["rqbit", "qb", "webtorrent"].includes(engine)) {
+    return NextResponse.json({ error: `Unknown engine "${engine}" — use rqbit, qb, or webtorrent` }, { status: 400 });
+  }
+  if (engine) console.log(`[stream] engine override: ${engine} forced for ${infoHash.slice(0, 10)}…`);
 
   // Space-floor guardrail: never start a torrent write when the disk is
   // nearly full. Fails fast with a visible message instead of filling the
@@ -125,75 +135,91 @@ export async function GET(request) {
   // from it FIRST. Fallback engines keep state across retry storms; knocking
   // on rqbit first would re-register a magnet on a weak swarm and burn the
   // client's patience re-resolving metadata that qB already has on disk.
-  try {
-    const pre = await qbTorrentProgress(infoHash);
-    if (pre && pre.progress > 0) {
-      console.log(`[stream] qB pre-check hit: torrent already at ${Math.round(pre.progress * 100)}% — serving from qB directly`);
-      const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 15000 });
-      if (q) {
-        touchStream(infoHash);
-        return await serveFromQb(q, rangeHeader);
+  // (?engine= override skips this unless qb is the forced engine.)
+  if (!engine || engine === "qb") {
+    try {
+      const pre = await qbTorrentProgress(infoHash);
+      if (pre && pre.progress > 0) {
+        console.log(`[stream] qB pre-check hit: torrent already at ${Math.round(pre.progress * 100)}% — serving from qB directly`);
+        const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 15000 });
+        if (q) {
+          touchStream(infoHash);
+          return await serveFromQb(q, rangeHeader);
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   // ---- Engine 1: rqbit (librqbit) --------------------------------------------
-  try {
-    const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
-    if (r) {
-      console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
-      touchStream(infoHash); // ledger: a client is reading this torrent
-      // Warm-up hold: rqbit's stream endpoint answers with headers even when
-      // zero pieces exist. Clients with aggressive connect timeouts (Debrify)
-      // see "no data" and quit — so hold here until the first bytes land
-      // (same treatment the webtorrent path always had).
-      const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
-      const warmed = await rqWaitForData(rid, infoHash, 60000);
-      if (!warmed) console.error(`[stream] rqbit: no first bytes after 60s — serving ${r.name} anyway (client may still connect)`);
-      // Force the head+tail pieces to exist: fire-and-forget, the response
-      // streams as soon as THIS range has data.
-      warmHeadTail(r.streamUrl, r.size).catch(() => {});
-      // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
-      // through directly. (Redirecting used to hand the client the server's
-      // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
-      // so every rqbit-served movie died before playing. Piping also drops
-      // one network hop.)
-      const upstream = await fetch(r.streamUrl, {
-        headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", ...(rangeHeader ? { Range: rangeHeader } : {}) },
-        redirect: "follow",
-      });
-      if (!upstream.ok && upstream.status !== 206) {
-        throw new Error(`rqbit stream endpoint returned HTTP ${upstream.status}`);
+  // (?engine= override: skipped unless rqbit is the forced engine.)
+  if (!engine || engine === "rqbit") {
+    try {
+      const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
+      if (r) {
+        console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
+        touchStream(infoHash); // ledger: a client is reading this torrent
+        // Warm-up hold: rqbit's stream endpoint answers with headers even when
+        // zero pieces exist. Clients with aggressive connect timeouts (Debrify)
+        // see "no data" and quit — so hold here until the first bytes land
+        // (same treatment the webtorrent path always had).
+        const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
+        const warmed = await rqWaitForData(rid, infoHash, 60000);
+        if (!warmed) console.error(`[stream] rqbit: no first bytes after 60s — serving ${r.name} anyway (client may still connect)`);
+        // Force the head+tail pieces to exist: fire-and-forget, the response
+        // streams as soon as THIS range has data.
+        warmHeadTail(r.streamUrl, r.size).catch(() => {});
+        // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
+        // through directly. (Redirecting used to hand the client the server's
+        // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
+        // so every rqbit-served movie died before playing. Piping also drops
+        // one network hop.)
+        const upstream = await fetch(r.streamUrl, {
+          headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", ...(rangeHeader ? { Range: rangeHeader } : {}) },
+          redirect: "follow",
+        });
+        if (!upstream.ok && upstream.status !== 206) {
+          throw new Error(`rqbit stream endpoint returned HTTP ${upstream.status}`);
+        }
+        const ext = path.extname(r.name).toLowerCase();
+        const headers = {
+          "Content-Type": MIME[ext] || "application/octet-stream",
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "no-store",
+        };
+        for (const h of ["Content-Length", "Content-Range"]) {
+          const v = upstream.headers.get(h);
+          if (v) headers[h] = v;
+        }
+        return new Response(trackStream(upstream.body, infoHash), { status: upstream.status === 206 ? 206 : 200, headers });
       }
-      const ext = path.extname(r.name).toLowerCase();
-      const headers = {
-        "Content-Type": MIME[ext] || "application/octet-stream",
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "no-store",
-      };
-      for (const h of ["Content-Length", "Content-Range"]) {
-        const v = upstream.headers.get(h);
-        if (v) headers[h] = v;
-      }
-      return new Response(trackStream(upstream.body, infoHash), { status: upstream.status === 206 ? 206 : 200, headers });
+    } catch (e) {
+      const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
+      console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — ${engine === "rqbit" ? "forced override, stopping" : "trying qBittorrent"}`);
     }
-  } catch (e) {
-    const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
-    console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — trying qBittorrent`);
+    if (engine === "rqbit") {
+      return NextResponse.json({ error: "rqbit engine failed (forced ?engine=rqbit)" }, { status: 504 });
+    }
   }
 
   // ---- Engine 2: qBittorrent (proven fallback) --------------------------------
-  try {
-    const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
-    if (q) {
-      console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
-      return await serveFromQb(q, rangeHeader);
+  // (?engine= override: skipped unless qb is the forced engine.)
+  if (!engine || engine === "qb") {
+    try {
+      const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
+      if (q) {
+        console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
+        return await serveFromQb(q, rangeHeader);
+      }
+    } catch (e) {
+      console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — ${engine === "qb" ? "forced override, stopping" : "falling back to webtorrent"}`);
     }
-  } catch (e) {
-    console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — falling back to webtorrent`);
+    if (engine === "qb") {
+      return NextResponse.json({ error: "qBittorrent engine failed (forced ?engine=qb)" }, { status: 504 });
+    }
   }
 
   // ---- Engine 3: webtorrent ---------------------------------------------------
+  // Reached when nothing was forced, or when webtorrent IS the forced engine.
   if (!(await qbAvailable())) console.log("[stream] qbittorrent not configured — using webtorrent engine");
   let t, pick;
   try {
