@@ -146,6 +146,29 @@ async function tryTorrServer(infoHash, rangeHeader) {
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1000));
+  // Warm-up: wake the torrent and trigger file preload, then wait until
+  // TorrServer has actually cached some bytes. Serving with an empty cache
+  // makes the player freeze after the first buffer (TorrServer test, 2026-11-18).
+  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/wake`, {
+    method: "POST", signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+  await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/files/0/preload`, {
+    method: "POST", signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+  // Poll cache status up to 30s for first bytes
+  const warmStart = Date.now();
+  let warmed = false;
+  while (Date.now() - warmStart < 30000) {
+    try {
+      const st = await fetch(`http://127.0.0.1:8090/api/torrents/${infoHash}/cache`, {
+        signal: AbortSignal.timeout(3000),
+      }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const cached = Number(st?.preloaded_bytes ?? st?.cached ?? st?.bytes ?? 0);
+      if (cached > 0) { warmed = true; break; }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (!warmed) console.error(`[stream] TorrServer: no cached bytes after 30s — serving anyway (weak swarm?)`);
   const streamUrl = `http://127.0.0.1:8090/api/stream/${infoHash}/0`;
   // Stream from TorrServer — it serves Range requests from RAM cache
   const H = { "User-Agent": "HomeStream/1.0 VLC/3.0" };
