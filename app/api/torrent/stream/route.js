@@ -77,14 +77,14 @@ async function serveFromQb(q, rangeHeader) {
  * stream server. First play needs swarm peers, so it can take a while to
  * reach playable speed; browsers just see a normal byte stream.
  *
- * Engine order: qBittorrent (primary — sequential + disk reads), then
- * rqbit → webtorrent as fallbacks.
+ * Engine order: rqbit (primary — self-healed by the watchdog), then
+ * qBittorrent → webtorrent as fallbacks.
  */
 
-/** Negative cache: a hash whose rqbit engine timed out is skipped for 90s.
- *  Player retries fire every 5-10s; without this each retry re-enters rqbit
- *  and burns another 10s API timeout while rqbit is wedged (8 failures in
- *  60s — 2026-11-18). qB delivers the real video; go there immediately. */
+/** Negative cache: a hash whose rqbit engine failed twice in a row is skipped
+ * for 90s, so a player's 5-10s retry storm can't hammer a wedged daemon while
+ * the watchdog prepares a restart. ONE failure never skips rqbit — a transient
+ * timeout must not hand playback to qB, which is now only the fallback. */
 function rqFail() {
   const g = globalThis;
   if (!g.__hsRqFail) g.__hsRqFail = new Map();
@@ -125,31 +125,14 @@ export async function GET(request) {
     );
   }
 
-  // ---- Engine 1: qBittorrent (primary — sequential, serves from disk) ----------
-  // qB is the engine that actually delivers video here: sequential download +
-  // first/last piece priority, then plain disk reads. qbEnsureTorrent also
-  // short-circuits when qB already holds the torrent (fast repeat plays).
-  // (?engine= override: skipped unless qb is the forced engine.)
-  if (!engine || engine === "qb") {
-    try {
-      const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
-      if (q) {
-        console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
-        return await serveFromQb(q, rangeHeader);
-      }
-    } catch (e) {
-      console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — ${engine === "qb" ? "forced override, stopping" : "trying rqbit"}`);
-    }
-    if (engine === "qb") {
-      return NextResponse.json({ error: "qBittorrent engine failed (forced ?engine=qb)" }, { status: 504 });
-    }
-  }
-
-  // ---- Engine 2: rqbit (librqbit) — fallback -----------------------------------
+  // ---- Engine 1: rqbit (librqbit) — PRIMARY ---------------------------------
+  // rqbit is the main engine: file-focus + native Range streaming, and the
+  // watchdog self-heals a frozen daemon. qB only gets a turn when rqbit can't
+  // deliver (or when ?engine=qb is forced).
   // (?engine= override: skipped unless rqbit is the forced engine.)
   const rqFailEntry = rqFail().get(infoHash);
-  const rqCooling = rqFailEntry && Date.now() - rqFailEntry.at < RQ_FAIL_TTL;
-  if (rqCooling && !engine) console.log(`[stream] rqbit cooling down (${rqFailEntry.err}) — skipping to webtorrent`);
+  const rqCooling = rqFailEntry && rqFailEntry.count >= 2 && Date.now() - rqFailEntry.at < RQ_FAIL_TTL;
+  if (rqCooling && !engine) console.log(`[stream] rqbit cooling down after ${rqFailEntry.count} failures (${rqFailEntry.err}) — trying qBittorrent`);
   if ((!engine || engine === "rqbit") && !(rqCooling && !engine)) {
     try {
       const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
@@ -188,12 +171,33 @@ export async function GET(request) {
         return new Response(trackStream(upstream.body, infoHash), { status: upstream.status === 206 ? 206 : 200, headers });
       }
     } catch (e) {
-      rqFail().set(infoHash, { at: Date.now(), err: String(e?.message || e).slice(0, 80) });
+      const prev = rqFail().get(infoHash);
+      rqFail().set(infoHash, { at: Date.now(), count: (prev?.count || 0) + 1, err: String(e?.message || e).slice(0, 80) });
       const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
-      console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — ${engine === "rqbit" ? "forced override, stopping" : "trying webtorrent"}`);
+      console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — ${engine === "rqbit" ? "forced override, stopping" : "trying qBittorrent"}`);
     }
     if (engine === "rqbit") {
       return NextResponse.json({ error: "rqbit engine failed (forced ?engine=rqbit)" }, { status: 504 });
+    }
+  }
+
+  // ---- Engine 2: qBittorrent (fallback — sequential, serves from disk) -----
+  // qB is the fallback: sequential download + first/last piece priority, then
+  // plain disk reads. qbEnsureTorrent short-circuits when qB already holds a
+  // torrent with REAL data (progress>0 guard), so repeat plays stay fast.
+  // (?engine= override: skipped unless qb is the forced engine.)
+  if (!engine || engine === "qb") {
+    try {
+      const q = await qbEnsureTorrent({ infoHash, nameHint, trackers });
+      if (q) {
+        console.log(`[stream] qBittorrent engine serving ${q.name} (${Math.round(q.size / 1048576)} MB)`);
+        return await serveFromQb(q, rangeHeader);
+      }
+    } catch (e) {
+      console.error(`[stream] qBittorrent engine failed (${String(e).slice(0, 120)}) — ${engine === "qb" ? "forced override, stopping" : "trying webtorrent"}`);
+    }
+    if (engine === "qb") {
+      return NextResponse.json({ error: "qBittorrent engine failed (forced ?engine=qb)" }, { status: 504 });
     }
   }
 
