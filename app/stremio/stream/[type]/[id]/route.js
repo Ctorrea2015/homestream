@@ -184,6 +184,21 @@ export async function GET(request, { params }) {
   const epTag = epM ? ` S${String(Number(epM[1])).padStart(2, "0")}E${String(Number(epM[2])).padStart(2, "0")}` : "";
   const ranked = rankStreams(all).slice(0, 12);
 
+  // ---- ⚡ Auto: one tap to the top-ranked raw torrent, already on rqbit ---
+  // Debrify/libmpv follows the 302 from the play route straight into the
+  // stream endpoint. The normal pre-warm below has usually loaded the same
+  // torrent by the time the user taps, so the resolve inside is instant.
+  if (ranked.some((s) => s.source === "torrent")) {
+    const auto = new URL("/api/torrent/resolve/play", base);
+    auto.searchParams.set("id", torrentId);
+    auto.searchParams.set("type", type);
+    streams.push({
+      title: "⚡ Auto — best source, already on rqbit",
+      url: auto.toString(),
+      behaviorHints: { notWebReady: true },
+    });
+  }
+
   // Pre-warm the best torrent source: register it with rqbit NOW, in the
   // background, so the swarm wakes up while the user is still looking at the
   // source list. Direct clients (Debrify) have aggressive connect timeouts —
