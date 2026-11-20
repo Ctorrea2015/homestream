@@ -1,28 +1,86 @@
 /**
- * rqbit-compatible engine service.
+ * RIPTIDE — HomeStream's custom streaming torrent engine.
  *
- * Implements the EXACT HTTP API HomeStream's lib/rqbit.js calls, so you can
- * point HomeStream at it with .data/rqbit.json:
- *   { "host": "http://127.0.0.1:3031" }
+ * Speaks rqbit's exact HTTP API so HomeStream works unchanged
+ * (.data/rqbit.json → { "host": "http://127.0.0.1:3031" }).
+ *
+ * Better than rqbit: real seeder gate (#2), 15s dead-swarm failover (#3),
+ * stream-first file focus (#4), bounded state + rolling idle cleanup (#5).
  *
  * Backends:
  *   "mock" — serves a local file with simulated stats (zero setup, for dev)
  *   "qb"   — proxies to qBittorrent's WebUI API (real downloads today; swap
  *            in your own peer/piece logic later without touching HomeStream)
  *
- * Run: node custom-engine/rqbit-compatible.mjs
+ * Run: node custom-engine/riptide.mjs
  */
 import http from "node:http";
+import dgram from "node:dgram";
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
-const CFG_PATH = new URL("./rqbit-compat-config.json", import.meta.url);
+const CFG_PATH = new URL("./riptide-config.json", import.meta.url);
 const CFG = { port: 3031, backend: "mock", qbUrl: "http://127.0.0.1:8080",
   qbUser: "admin", qbPass: "adminadmin",
+  // Better-than-rqbit knobs
+  seederGate: true, minSeeders: 1, failoverMs: 15000, idleMs: 30 * 60 * 1000,
+  mockSeeders: 6,
+  scrapers: [
+    { host: "tracker.opentrackr.org", port: 1337 },
+    { host: "open.stealth.si", port: 80 },
+    { host: "exodus.desync.com", port: 6969 },
+    { host: "tracker.tiny-vps.com", port: 6969 },
+  ],
   mock: { infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", file: "./custom-engine/sample.mkv" },
   ...JSON.parse(await fs.readFile(CFG_PATH, "utf8").catch(() => "{}")) };
 const PORT = Number(CFG.port || 3031);
+
+/* ------------------- real seeder verification (#2) ---------------------- */
+/** UDP scrape a tracker for a 20-byte infoHash. Returns {seeders, leechers}
+ *  or null on timeout. Uses the tracker's binary scrape protocol, not DHT. */
+function scrapeTracker(host, port, hashBuf) {
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket("udp4");
+    const timer = setTimeout(() => { try { sock.close(); } catch {} resolve(null); }, 3000);
+    sock.once("message", (msg) => {
+      try {
+        if (msg.length < 16) throw new Error("short");
+        const action = msg.readUInt32BE(0);
+        if (action !== 0) throw new Error("connect action");
+        const cid = msg.subarray(8, 16);
+        const req = Buffer.alloc(36);
+        Buffer.from("0000041727101980", "hex").copy(req, 0); // protocol id
+        req.writeUInt32BE(2, 8);                            // action=2 (scrape)
+        cid.copy(req, 12);
+        hashBuf.copy(req, 20);
+        sock.send(req, port, host);
+        sock.once("message", (reply) => {
+          clearTimeout(timer);
+          try {
+            if (reply.readUInt32BE(0) !== 2 || reply.length < 20) throw new Error("bad scrape");
+            resolve({ seeders: reply.readUInt32BE(16), leechers: reply.readUInt32BE(12) });
+          } catch { resolve(null); }
+          try { sock.close(); } catch {}
+        });
+      } catch { clearTimeout(timer); try { sock.close(); } catch {} resolve(null); }
+    });
+    const connect = Buffer.alloc(16);
+    Buffer.from("0000041727101980", "hex").copy(connect, 0); // protocol id
+    connect.writeUInt32BE(0, 8);                 // action 0 = connect
+    connect.writeUInt32BE(1, 12);                // transaction id
+    try { sock.send(connect, port, host); } catch { clearTimeout(timer); resolve(null); }
+  });
+}
+
+/** Sum real seeders across trackers. Mock backend uses a configured number. */
+async function verifySeeders(infoHash) {
+  if (CFG.backend !== "qb") return Number(CFG.mockSeeders) || 0;
+  const buf = Buffer.from(infoHash, "hex");
+  if (buf.length !== 20) return 0;
+  const results = await Promise.allSettled(CFG.scrapers.map((s) => scrapeTracker(s.host, s.port, buf)));
+  return results.reduce((n, r) => n + (r.status === "fulfilled" && r.value ? r.value.seeders : 0), 0);
+}
 
 /* ---------------------------- helpers ---------------------------------- */
 
@@ -208,8 +266,57 @@ function serveFile(res, file, range, method) {
 }
 let reqMethod = "GET";
 
+/* ------------- bounded state / liveness / failover (#3 #4 #5) ----------- */
+const liveness = new Map();   // id → { at, addAt, seeders, focus, alts, failed }
+const MAX_STATE = 500;        // bounded memory: never grow past this
+const touch = (key) => {
+  const e = liveness.get(String(key));
+  if (e) e.at = Date.now();
+};
+
+// Stream-first focus: HomeStream says which file it will play. Remember it so
+// the engine can keep that file's pieces hot and drop the rest from state.
+// (qB backend also sets real file priorities in onlyFiles.)
+function setFocus(key, files) {
+  const e = liveness.get(String(key));
+  if (e) e.focus = files;
+}
+
+// Rolling cleanup (#5) + failover (#3): one timer, no per-request races.
+setInterval(async () => {
+  const now = Date.now();
+  for (const [id, e] of liveness) {
+    // Failover: no peers AND no bytes after 15s → drop and try the next source.
+    if (!e.failed && e.alts?.length && now - e.addAt >= CFG.failoverMs) {
+      try {
+        const stat = await BE.stats(id);
+        const snap = stat?.snapshot || {};
+        const peers = Number(snap.peer_stats?.live ?? 0);
+        const bytes = Number(snap.fetched_bytes ?? 0);
+        if (peers === 0 && bytes === 0 && now - e.at >= CFG.failoverMs) {
+          const next = e.alts.shift();
+          console.log(`[engine] failover: torrent ${id} has 0 peers and 0 bytes after ${CFG.failoverMs / 1000}s — switching to ${next.slice(0, 10)}`);
+          try { await BE.delete(id); } catch {}
+          liveness.delete(String(id));
+          const out = await BE.add(next, { body: `magnet:?xt=urn:btih:${next}`, ctype: "text/plain", trackers: [] });
+          liveness.set(String(out.id), { at: now, addAt: now, seeders: await verifySeeders(next), alts: e.alts, focus: [] });
+          continue;
+        }
+      } catch {}
+    }
+    // Rolling cleanup (#5): idle torrents are deleted.
+    if (now - e.at > CFG.idleMs) {
+      console.log(`[engine] idle cleanup: deleting torrent ${id} (${Math.round((now - e.at) / 60000)}min idle)`);
+      try { await BE.delete(id); } catch {}
+      liveness.delete(id);
+    }
+  }
+  if (liveness.size > MAX_STATE) {
+    for (const [id, e] of [...liveness].sort((a, b) => a[1].at - b[1].at).slice(0, liveness.size - MAX_STATE)) liveness.delete(id);
+  }
+}, 5000).unref?.();
+
 http.createServer(async (req, res) => {
-  reqMethod = req.method;
   const u = new URL(req.url, "http://localhost");
   try {
     // canary: empty-body add must answer HTTP 400 instantly (watchdog contract)
@@ -220,8 +327,22 @@ http.createServer(async (req, res) => {
       let hash = /x-bittorrent/i.test(ctype) ? infoHashFromTorrent(buf) : /([a-f0-9]{40})/i.exec(buf.toString())?.[1]?.toLowerCase();
       if (!hash) return j(res, 400, { error_kind: "internal_error", human_readable: "could not parse info hash" });
       const trQ = u.searchParams.getAll("tr");
+      // #2 HEALTH GATE: verify real seeders BEFORE adding. A dead swarm is
+      // rejected immediately (HTTP 409), so HomeStream's resolver moves to
+      // its next ranked candidate instead of stalling at 0 bytes.
+      const seeders = await verifySeeders(hash);
+      if (CFG.seederGate && seeders < (CFG.minSeeders || 1)) {
+        console.log(`[engine] seeder gate: REJECTED ${hash.slice(0, 10)} — ${seeders} real seeders`);
+        return j(res, 409, { error_kind: "dead_swarm", human_readable: `no live seeders (${seeders}) — try another source`, seeders });
+      }
       const out = await BE.add(hash, { body: /x-bittorrent/i.test(ctype) ? buf : buf.toString(), ctype, trackers: trQ });
-      return j(res, 200, out);
+      // Alternates for engine-side failover (#3): ?alt=<hash>&alt=<hash>
+      liveness.set(String(out.id), {
+        at: Date.now(), addAt: Date.now(), seeders,
+        alts: u.searchParams.getAll("alt").map((h) => h.toLowerCase()).filter((h) => /^[a-f0-9]{40}$/.test(h)),
+        focus: [],
+      });
+      return j(res, 200, { ...out, seeders });
     }
     if (req.method === "GET" && u.pathname === "/torrents") {
       return j(res, 200, { torrents: await BE.list() });
@@ -229,22 +350,25 @@ http.createServer(async (req, res) => {
     let m = /^\/torrents\/([^/]+)(?:\/(stats|delete|pause|update_only_files|stream))?(?:\/(\d+))?$/.exec(u.pathname);
     if (m) {
       const key = m[1], op = m[2], idx = m[3] ? Number(m[3]) : null;
+      touch(key);
       if (req.method === "GET" && !op) return j(res, 200, await BE.detail(key));
       if (req.method === "GET" && op === "stats") return j(res, 200, await BE.stats(key));
-      if (req.method === "POST" && op === "delete") return j(res, 200, await BE.delete(key));
+      if (req.method === "POST" && op === "delete") { liveness.delete(String(key)); return j(res, 200, await BE.delete(key)); }
       if (req.method === "POST" && op === "pause") return j(res, 200, await BE.pause(key));
       if (req.method === "POST" && op === "update_only_files") {
         const b = JSON.parse((await body(req)).toString() || "{}");
+        setFocus(key, b.only_files || []); // #4 stream-first focus
         return j(res, 200, await BE.onlyFiles(key, b.only_files || []));
       }
       if (req.method === "GET" && op === "stream" && idx !== null) {
+        touch(key); // active playback — never clean this up
         const f = await BE.streamPath(key, idx);
-        return serveFile(res, f, req.headers.range);
+        return serveFile(res, f, req.headers.range, req.method);
       }
     }
-    if (u.pathname === "/") return j(res, 200, { ok: true, backend: CFG.backend, compat: "rqbit" });
+    if (u.pathname === "/") return j(res, 200, { ok: true, engine: "Riptide", backend: CFG.backend, compat: "rqbit", features: ["seeder-gate", "failover", "stream-first", "idle-cleanup"] });
     return j(res, 404, { error: "not found" });
   } catch (e) {
     return j(res, 500, { error_kind: "internal_error", human_readable: String(e?.message || e).slice(0, 120) });
   }
-}).listen(PORT, () => console.log(`rqbit-compatible engine (${CFG.backend}) on http://127.0.0.1:${PORT}`));
+}).listen(PORT, () => console.log(`Riptide (${CFG.backend}) on http://127.0.0.1:${PORT}`));
