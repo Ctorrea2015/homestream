@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { rankStreams } from "@/lib/rankStreams";
+import { qbEnsureTorrent } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqWaitForData } from "@/lib/rqbit";
 import { tpbFallbackStreams } from "@/lib/tpb";
 import { touchStream } from "@/lib/idleTorrents";
@@ -15,7 +16,8 @@ export const dynamic = "force-dynamic";
  * 2. keep ONLY raw P2P torrent sources (infoHash → our own engine URLs;
  *    debrid links and direct HTTP videos are excluded)
  * 3. rank for this hardware (1080p/x264/seeders first — see lib/rankStreams)
- * 4. load the top result into rqbit (metadata + file focus, disk guard)
+ * 4. pre-load the top result into qB (primary, disk-based) — rqbit is the
+ *    backup if qB isn't configured or rejects the source
  * 5. return the absolute /api/torrent/stream URL the client should open
  *
  * GET  ?id=tt0120338&type=movie
@@ -23,8 +25,8 @@ export const dynamic = "force-dynamic";
  * POST { "id": "tt0120338", "type": "movie", "wait": false }
  * Optional: wait=true → block up to 20 s for the first bytes to arrive.
  *
- * If rqbit rejects the first candidate (dead swarm, metadata timeout, disk
- * guard), the next ranked candidates are tried before giving up.
+ * If the loader rejects the first candidate (dead swarm, metadata timeout,
+ * disk guard), the next ranked candidates are tried before giving up.
  */
 
 const ID_RE = /^(tt\d+)(?::(\d{1,2}):(\d{1,3}))?$/;
@@ -97,7 +99,13 @@ async function resolve(request, body) {
     );
   }
 
-  // 3. rank, 4. load into rqbit (try a few if the top swarms are dead)
+  // 3. rank, 4. pre-load the top result so playback starts instantly.
+  //    qB is the PRIMARY loader (disk-based, reliable); rqbit is the backup.
+  //    Both ultimately return the SAME /api/torrent/stream URL (abs) — the
+  //    stream route itself picks an engine, but pre-loading here means the
+  //    data is already flowing by the time the player connects.
+  //    (2026-11-20: rqbit's direct use here caused ⚡ to fail on timeouts even
+  //    though qB could play the source fine.)
   const ranked = rankStreams(candidates);
   const epTag = p.type === "series" && p.season && p.episode
     ? ` S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(3, "0")}`
@@ -113,27 +121,50 @@ async function resolve(request, body) {
       // Keep the janitor from eating this registration before the client
       // even connects (fresh torrents have no files on disk yet).
       touchStream(infoHash);
-      const loaded = await rqEnsureTorrent({ infoHash, nameHint, trackers });
-      if (!loaded) throw new Error("rqbit engine unavailable");
+
+      // Primary loader: qB (returns real downloaded data on disk).
+      let loaded = null;
+      let engine = "qb";
+      let rqbitStreamUrl = null;
+      let ready = null;
+      try {
+        const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 60000 });
+        if (q) loaded = { name: q.name, size: q.size };
+      } catch (e) {
+        errors.push(`${infoHash.slice(0, 10)}: qb: ${String(e?.message || e).slice(0, 70)}`);
+      }
+      if (!loaded) {
+        // Backup loader: rqbit (its stream URL primes the stream route).
+        try {
+          const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
+          if (r) {
+            loaded = { name: r.name, size: r.size };
+            rqbitStreamUrl = r.streamUrl;
+            engine = "rqbit";
+          }
+        } catch (e) {
+          errors.push(`${infoHash.slice(0, 10)}: rqbit: ${String(e?.message || e).slice(0, 70)}`);
+        }
+      }
+      if (!loaded) throw new Error("no engine could load this source");
 
       // Best-effort warm read: pulls the head through our own stream route,
-      // which drives rqbit's piece prioritization and primes head+tail.
+      // which primes whichever engine will serve playback.
       fetch(abs, {
         headers: { Range: "bytes=0-1048575", "User-Agent": "HomeStream/1.0 VLC/3.0" },
         signal: AbortSignal.timeout(30000),
       }).then((r) => r.arrayBuffer()).then(() => touchStream(infoHash)).catch(() => {});
 
-      // Optional: block until the first pieces actually arrive.
-      let ready = null;
+      // Optional: block until the first pieces actually arrive (rqbit only).
       if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
           String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1") {
-        const id = /\/torrents\/(\d+)\//.exec(loaded.streamUrl)?.[1];
+        const id = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
         ready = id ? await rqWaitForData(id, infoHash, 20000) : null;
       }
 
       return NextResponse.json({
         ok: true,
-        engine: "rqbit",
+        engine,
         provider,
         imdbId: p.imdbId,
         type: p.type,
@@ -146,14 +177,14 @@ async function resolve(request, body) {
         size: loaded.size,
         ready,
         streamUrl: abs.toString(),
-        rqbitStreamUrl: loaded.streamUrl,
+        rqbitStreamUrl,
       });
     } catch (e) {
       errors.push(`${infoHash.slice(0, 10)}: ${String(e?.message || e).slice(0, 90)}`);
     }
   }
   return NextResponse.json(
-    { ok: false, error: "rqbit could not load any of the top sources", attempts: errors },
+    { ok: false, error: "no engine could load any of the top sources", attempts: errors },
     { status: 502 }
   );
 }
