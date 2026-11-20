@@ -7,6 +7,7 @@ import { showIdFor } from "@/lib/videos";
 import { rqEnsureTorrent } from "@/lib/rqbit";
 import { touchStream } from "@/lib/idleTorrents";
 import { tpbFallbackStreams } from "@/lib/tpb";
+import { customEngineStreams } from "@/lib/customEngine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -143,6 +144,19 @@ export async function GET(request, { params }) {
     all = [];
     for (const r of results) if (r.status === "fulfilled") all.push(...r.value);
     if (all.length) streamCache.set(cacheKey, { at: now, list: all });
+  }
+
+  // ---- External custom engine (HTTP service — see CUSTOM-ENGINE-API.md) ---
+  // Its sources go through the same ranker / pre-warm / rqbit play chain.
+  {
+    const ep = type === "series" ? /:(\d{1,2}):(\d{1,3})$/.exec(torrentId) : null;
+    const custom = await customEngineStreams({
+      type,
+      id: torrentId,
+      season: ep ? Number(ep[1]) : undefined,
+      episode: ep ? Number(ep[2]) : undefined,
+    });
+    if (custom.length) all.push(...custom);
   }
 
   // ---- TPB fallback: Torrentio sometimes drops whole shows ---------------

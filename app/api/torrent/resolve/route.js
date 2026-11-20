@@ -4,6 +4,7 @@ import { rankStreams } from "@/lib/rankStreams";
 import { qbEnsureTorrent } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqWaitForData } from "@/lib/rqbit";
 import { tpbFallbackStreams } from "@/lib/tpb";
+import { customEngineStreams } from "@/lib/customEngine";
 import { touchStream } from "@/lib/idleTorrents";
 
 export const runtime = "nodejs";
@@ -83,7 +84,14 @@ async function resolve(request, body) {
 
   // 1–2. sources → raw P2P only
   let candidates = (await addonSources(p.type, p.torrentId)).filter(isRawP2P);
-  let provider = "addons";
+  let provider = candidates.length ? "addons" : "";
+  const custom = (await customEngineStreams({
+    type: p.type, id: p.torrentId, season: p.season, episode: p.episode,
+  })).filter(isRawP2P);
+  if (custom.length) {
+    candidates.push(...custom);
+    provider = provider ? `${provider}+custom` : "custom-engine";
+  }
   if (!candidates.length) {
     // Same last-resort provider the Stremio surface uses: apibay when the
     // addon scrapers come up empty.
