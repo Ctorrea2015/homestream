@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { rankStreams } from "@/lib/rankStreams";
 import { qbEnsureTorrent } from "@/lib/qbittorrent";
-import { rqEnsureTorrent, rqWaitForData } from "@/lib/rqbit";
+import { rqEnsureTorrent, rqWaitForData, riptideHost } from "@/lib/rqbit";
 import { tpbFallbackStreams } from "@/lib/tpb";
 import { customEngineStreams } from "@/lib/customEngine";
 import { touchStream } from "@/lib/idleTorrents";
@@ -125,23 +125,30 @@ async function resolve(request, body) {
     try {
       // Keep the janitor from eating this registration before the client
       // even connects (fresh torrents have no files on disk yet).
-      touchStream(infoHash);
+        touchStream(infoHash);
 
-      // Primary loader: rqbit (the main engine). qB is only asked if rqbit
-      // rejects the source entirely.
-      let loaded = null;
-      let engine = "rqbit";
-      let rqbitStreamUrl = null;
-      let ready = null;
-      try {
-        const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
-        if (r) {
-          loaded = { name: r.name, size: r.size };
-          rqbitStreamUrl = r.streamUrl;
+        // Riptide first (when configured), then rqbit as backup loader.
+        const primaryHost = await riptideHost();
+        let loaded = null;
+        let engine = primaryHost ? "Riptide" : "rqbit";
+        let rqbitStreamUrl = null;
+        let ready = null;
+        for (const candidate of [
+          ...(primaryHost ? [{ name: "Riptide", host: primaryHost }] : []),
+          { name: "rqbit", host: null },
+        ]) {
+          try {
+            const r = await rqEnsureTorrent({ infoHash, nameHint, trackers, host: candidate.host });
+            if (r) {
+              loaded = { name: r.name, size: r.size };
+              rqbitStreamUrl = r.streamUrl;
+              engine = candidate.name;
+              break;
+            }
+          } catch (e) {
+            errors.push(`${infoHash.slice(0, 10)}: ${candidate.name}: ${String(e?.message || e).slice(0, 70)}`);
+          }
         }
-      } catch (e) {
-        errors.push(`${infoHash.slice(0, 10)}: rqbit: ${String(e?.message || e).slice(0, 70)}`);
-      }
       if (!loaded) {
         // Fallback loader: qB (disk-based, for sources rqbit can't resolve).
         try {
@@ -167,7 +174,7 @@ async function resolve(request, body) {
       if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
           String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1") {
         const id = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
-        ready = id ? await rqWaitForData(id, infoHash, 20000) : null;
+        ready = id ? await rqWaitForData(id, infoHash, 20000, primaryHost) : null;
       }
 
       return NextResponse.json({

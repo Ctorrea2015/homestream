@@ -14,6 +14,15 @@ cd ~/homestream/custom-engine
 node riptide.mjs
 ```
 
+Make Riptide engine #1 by enabling it:
+
+```json
+// .data/riptide.json
+{ "enabled": true, "host": "http://127.0.0.1:3031" }
+```
+
+With that file, both the stream route and ⚡ Auto resolver try **Riptide first**, then fall back to the stock rqbit daemon, then qB, then webtorrent. Remove the file (or set `enabled: false`) to go back to rqbit-first.
+
 Config: `custom-engine/riptide-config.json`
 
 ## Why it's better than rqbit here

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
 import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
-import { rqEnsureTorrent, rqAvailable, rqWaitForData } from "@/lib/rqbit";
+import { rqEnsureTorrent, rqAvailable, rqWaitForData, riptideHost } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { touchStream, openStream, closeStream } from "@/lib/idleTorrents";
@@ -85,10 +85,11 @@ async function serveFromQb(q, rangeHeader) {
  * for 90s, so a player's 5-10s retry storm can't hammer a wedged daemon while
  * the watchdog prepares a restart. ONE failure never skips rqbit — a transient
  * timeout must not hand playback to qB, which is now only the fallback. */
-function rqFail() {
+function rqFail(name = "rqbit") {
   const g = globalThis;
   if (!g.__hsRqFail) g.__hsRqFail = new Map();
-  return g.__hsRqFail;
+  if (!g.__hsRqFail.has(name)) g.__hsRqFail.set(name, new Map());
+  return g.__hsRqFail.get(name);
 }
 const RQ_FAIL_TTL = 90 * 1000;
 
@@ -108,8 +109,8 @@ export async function GET(request) {
   // engine actually delivers bytes on a given source (2026-11-18: webtorrent
   // is Engine 3 but had never been reached in isolation).
   const engine = (sp.get("engine") || "").toLowerCase();
-  if (engine && !["rqbit", "qb", "webtorrent"].includes(engine)) {
-    return NextResponse.json({ error: `Unknown engine "${engine}" — use rqbit, qb, or webtorrent` }, { status: 400 });
+  if (engine && !["rqbit", "riptide", "qb", "webtorrent"].includes(engine)) {
+    return NextResponse.json({ error: `Unknown engine — use rqbit, riptide, qb, or webtorrent` }, { status: 400 });
   }
   if (engine) console.log(`[stream] engine override: ${engine} forced for ${infoHash.slice(0, 10)}…`);
 
@@ -125,38 +126,36 @@ export async function GET(request) {
     );
   }
 
-  // ---- Engine 1: rqbit (librqbit) — PRIMARY ---------------------------------
-  // rqbit is the main engine: file-focus + native Range streaming, and the
-  // watchdog self-heals a frozen daemon. qB only gets a turn when rqbit can't
-  // deliver (or when ?engine=qb is forced).
-  // (?engine= override: skipped unless rqbit is the forced engine.)
-  const rqFailEntry = rqFail().get(infoHash);
-  const rqCooling = rqFailEntry && rqFailEntry.count >= 2 && Date.now() - rqFailEntry.at < RQ_FAIL_TTL;
-  if (rqCooling && !engine) console.log(`[stream] rqbit cooling down after ${rqFailEntry.count} failures (${rqFailEntry.err}) — trying qBittorrent`);
-  if ((!engine || engine === "rqbit") && !(rqCooling && !engine)) {
+  // ---- Engine 1: Riptide (custom, configured) → rqbit (primary engines) ----
+  // Riptide speaks rqbit's API and is tried FIRST when configured in
+  // .data/riptide.json. The stock rqbit daemon is the fallback if Riptide
+  // isn't configured or fails. qB is only Engine 2 after both fail.
+  const riptide = (!engine || engine === "riptide") ? await riptideHost() : null;
+  const engines = [];
+  if (riptide) engines.push({ name: "Riptide", host: riptide, forced: engine === "riptide" });
+  if (!engine || engine === "rqbit") engines.push({ name: "rqbit", host: null, forced: engine === "rqbit" });
+
+  for (const eng of engines) {
+    const fails = rqFail(eng.name);
+    const failEntry = fails.get(infoHash);
+    const cooling = failEntry && failEntry.count >= 2 && Date.now() - failEntry.at < RQ_FAIL_TTL;
+    if (cooling && !eng.forced) {
+      console.log(`[stream] ${eng.name} cooling down after ${failEntry.count} failures — trying next engine`);
+      continue;
+    }
     try {
-      const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
+      const r = await rqEnsureTorrent({ infoHash, nameHint, trackers, host: eng.host });
       if (r) {
-        console.log(`[stream] rqbit engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
-        touchStream(infoHash); // ledger: a client is reading this torrent
-        // Warm-up hold: rqbit's stream endpoint answers with headers even when
-        // zero pieces exist. Clients with aggressive connect timeouts (Debrify)
-        // see "no data" and quit — so hold here until the first bytes land.
+        console.log(`[stream] ${eng.name} engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
+        touchStream(infoHash);
         const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
-        const warmed = await rqWaitForData(rid, infoHash, 60000);
-        if (!warmed) console.error(`[stream] rqbit: no first bytes after 60s — serving ${r.name} anyway (client may still connect)`);
-        // rqbit's /stream/{fileIdx} endpoint handles Range itself — pipe it
-        // through directly. (Redirecting used to hand the client the server's
-        // BIND address — http://0.0.0.0:3000/... — which no player can fetch,
-        // so every rqbit-served movie died before playing. Piping also drops
-        // one network hop.)
+        const warmed = await rqWaitForData(rid, infoHash, 60000, eng.host);
+        if (!warmed) console.error(`[stream] ${eng.name}: no first bytes after 60s — serving ${r.name} anyway`);
         const upstream = await fetch(r.streamUrl, {
           headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", ...(rangeHeader ? { Range: rangeHeader } : {}) },
           redirect: "follow",
         });
-        if (!upstream.ok && upstream.status !== 206) {
-          throw new Error(`rqbit stream endpoint returned HTTP ${upstream.status}`);
-        }
+        if (!upstream.ok && upstream.status !== 206) throw new Error(`${eng.name} stream endpoint returned HTTP ${upstream.status}`);
         const ext = path.extname(r.name).toLowerCase();
         const headers = {
           "Content-Type": MIME[ext] || "application/octet-stream",
@@ -167,17 +166,17 @@ export async function GET(request) {
           const v = upstream.headers.get(h);
           if (v) headers[h] = v;
         }
-        rqFail().delete(infoHash); // rqbit worked — clear any old cooldown
+        fails.delete(infoHash); // engine worked — clear its cooldown
         return new Response(trackStream(upstream.body, infoHash), { status: upstream.status === 206 ? 206 : 200, headers });
       }
     } catch (e) {
-      const prev = rqFail().get(infoHash);
-      rqFail().set(infoHash, { at: Date.now(), count: (prev?.count || 0) + 1, err: String(e?.message || e).slice(0, 80) });
+      const prev = fails.get(infoHash);
+      fails.set(infoHash, { at: Date.now(), count: (prev?.count || 0) + 1, err: String(e?.message || e).slice(0, 80) });
       const stack = String(e?.stack || "").split("\n").slice(0, 3).join(" | ");
-      console.error(`[stream] rqbit engine failed (${String(e).slice(0, 120)}) at ${stack} — ${engine === "rqbit" ? "forced override, stopping" : "trying qBittorrent"}`);
+      console.error(`[stream] ${eng.name} engine failed (${String(e).slice(0, 120)}) at ${stack} — ${eng.forced ? "forced override, stopping" : "trying next engine"}`);
     }
-    if (engine === "rqbit") {
-      return NextResponse.json({ error: "rqbit engine failed (forced ?engine=rqbit)" }, { status: 504 });
+    if (eng.forced) {
+      return NextResponse.json({ error: `${eng.name} engine failed (forced ?engine=${engine})` }, { status: 504 });
     }
   }
 
