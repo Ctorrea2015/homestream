@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTorrent, pickVideoFile, prioritizePieces } from "@/lib/torrent";
-import { qbEnsureTorrent, qbReadRange, qbAvailable } from "@/lib/qbittorrent";
+import { qbEnsureTorrent, qbReadRange, qbAvailable, qbTorrentProgress } from "@/lib/qbittorrent";
 import { rqEnsureTorrent, rqAvailable, rqWaitForData } from "@/lib/rqbit";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -123,6 +123,22 @@ export async function GET(request) {
       { error: `Server disk almost full (${(free / 1e9).toFixed(1)} GB free). Torrents are deleted when you close a player — close open players and try again.` },
       { status: 507 },
     );
+  }
+
+  // ---- qB pre-check: if qB ALREADY holds this torrent with real data, serve
+  // straight from disk. ⚡ Auto source pre-loads the top pick into qB (commit
+  // e490008); without this check the stream route would still try rqbit first
+  // and re-register the magnet, wasting the pre-load and re-introducing the
+  // timeout/404 problem. No open stream = not actively watched, safe to reuse.
+  if (!engine || engine === "qb") {
+    try {
+      const pre = await qbTorrentProgress(infoHash);
+      if (pre && pre.progress > 0) {
+        console.log(`[stream] qB pre-check hit: torrent already at ${Math.round(pre.progress * 100)}% — serving from qB directly`);
+        const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 15000 });
+        if (q) return await serveFromQb(q, rangeHeader);
+      }
+    } catch {}
   }
 
   // ---- Engine 1: rqbit (librqbit) — PRIMARY ---------------------------------
