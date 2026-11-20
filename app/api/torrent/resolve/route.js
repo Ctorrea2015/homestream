@@ -107,13 +107,10 @@ async function resolve(request, body) {
     );
   }
 
-  // 3. rank, 4. pre-load the top result so playback starts instantly.
-  //    qB is the PRIMARY loader (disk-based, reliable); rqbit is the backup.
-  //    Both ultimately return the SAME /api/torrent/stream URL (abs) — the
-  //    stream route itself picks an engine, but pre-loading here means the
-  //    data is already flowing by the time the player connects.
-  //    (2026-11-20: rqbit's direct use here caused ⚡ to fail on timeouts even
-  //    though qB could play the source fine.)
+  // 3. rank, 4. pre-load into rqbit (the PRIMARY engine) so playback starts
+  //    instantly. qB is only the fallback if rqbit can't load the source.
+  //    Both engines return the SAME /api/torrent/stream URL (abs) — but
+  //    pre-loading here means data is already flowing when the player connects.
   const ranked = rankStreams(candidates);
   const epTag = p.type === "series" && p.season && p.episode
     ? ` S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(3, "0")}`
@@ -130,28 +127,31 @@ async function resolve(request, body) {
       // even connects (fresh torrents have no files on disk yet).
       touchStream(infoHash);
 
-      // Primary loader: qB (returns real downloaded data on disk).
+      // Primary loader: rqbit (the main engine). qB is only asked if rqbit
+      // rejects the source entirely.
       let loaded = null;
-      let engine = "qb";
+      let engine = "rqbit";
       let rqbitStreamUrl = null;
       let ready = null;
       try {
-        const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 60000 });
-        if (q) loaded = { name: q.name, size: q.size };
+        const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
+        if (r) {
+          loaded = { name: r.name, size: r.size };
+          rqbitStreamUrl = r.streamUrl;
+        }
       } catch (e) {
-        errors.push(`${infoHash.slice(0, 10)}: qb: ${String(e?.message || e).slice(0, 70)}`);
+        errors.push(`${infoHash.slice(0, 10)}: rqbit: ${String(e?.message || e).slice(0, 70)}`);
       }
       if (!loaded) {
-        // Backup loader: rqbit (its stream URL primes the stream route).
+        // Fallback loader: qB (disk-based, for sources rqbit can't resolve).
         try {
-          const r = await rqEnsureTorrent({ infoHash, nameHint, trackers });
-          if (r) {
-            loaded = { name: r.name, size: r.size };
-            rqbitStreamUrl = r.streamUrl;
-            engine = "rqbit";
+          const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 60000 });
+          if (q) {
+            loaded = { name: q.name, size: q.size };
+            engine = "qb";
           }
         } catch (e) {
-          errors.push(`${infoHash.slice(0, 10)}: rqbit: ${String(e?.message || e).slice(0, 70)}`);
+          errors.push(`${infoHash.slice(0, 10)}: qb: ${String(e?.message || e).slice(0, 70)}`);
         }
       }
       if (!loaded) throw new Error("no engine could load this source");
