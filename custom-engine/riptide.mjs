@@ -17,11 +17,12 @@
 import http from "node:http";
 import dgram from "node:dgram";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
 const CFG_PATH = new URL("./riptide-config.json", import.meta.url);
-const CFG = { port: 3031, backend: "mock", qbUrl: "http://127.0.0.1:8080",
+const DEFAULT = { port: 3031, backend: "mock", qbUrl: "http://127.0.0.1:8080",
   qbUser: "admin", qbPass: "adminadmin",
   // Better-than-rqbit knobs
   seederGate: true, minSeeders: 1, failoverMs: 15000, idleMs: 30 * 60 * 1000,
@@ -33,7 +34,20 @@ const CFG = { port: 3031, backend: "mock", qbUrl: "http://127.0.0.1:8080",
     { host: "tracker.tiny-vps.com", port: 6969 },
   ],
   mock: { infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", file: "./custom-engine/sample.mkv" },
-  ...JSON.parse(await fs.readFile(CFG_PATH, "utf8").catch(() => "{}")) };
+};
+const CFG = {
+  ...DEFAULT,
+  // Reuse HomeStream's qB credentials (.data/qbittorrent.json) unless the
+  // local config explicitly overrides them — no duplicate password entry.
+  ...(() => {
+    try {
+      const q = JSON.parse(readFileSync(new URL("../.data/qbittorrent.json", import.meta.url), "utf8"));
+      return q?.host ? { qbUrl: q.host, qbUser: q.user, qbPass: q.pass } : {};
+    } catch { return {}; }
+  })(),
+  ...JSON.parse(await fs.readFile(CFG_PATH, "utf8").catch(() => "{}")),
+};
+
 const PORT = Number(CFG.port || 3031);
 
 /* ------------------- real seeder verification (#2) ---------------------- */
