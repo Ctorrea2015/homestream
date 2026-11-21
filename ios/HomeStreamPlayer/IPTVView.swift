@@ -4,7 +4,8 @@ import UIKit
 struct IPTVView: View {
     @EnvironmentObject var settings: Settings
     @State private var channels: [IPTVChannel] = []
-    @State private var loading = false
+    @State private var filter = ""
+    @State private var loading = true
     @State private var msg = ""
     @State private var playingIndex: Int? = nil
     @State private var showSources = false
@@ -21,15 +22,15 @@ struct IPTVView: View {
                         Button("Add sources") { showSources = true }.buttonStyle(.borderedProminent)
                     }
                 } else {
-                    List(channels.indices, id: \.self) { i in
-                        Button { playingIndex = i } label: {
+                    List(filtered.indices, id: \.self) { i in
+                        Button { playingIndex = filtered[i].1 } label: {
                             HStack {
-                                AsyncImage(url: URL(string: channels[i].logo ?? "")) { img in
+                                AsyncImage(url: URL(string: filtered[i].0.logo ?? "")) { img in
                                     img.resizable().frame(width: 40, height: 40).cornerRadius(6)
                                 } placeholder: { Image(systemName: "tv").frame(width: 40, height: 40) }
                                 VStack(alignment: .leading) {
-                                    Text(channels[i].name).foregroundStyle(.primary)
-                                    if let grp = channels[i].group, !grp.isEmpty {
+                                    Text(filtered[i].0.name).foregroundStyle(.primary)
+                                    if let grp = filtered[i].0.group, !grp.isEmpty {
                                         Text(grp).font(.caption2).foregroundStyle(.secondary)
                                     }
                                 }
@@ -39,6 +40,7 @@ struct IPTVView: View {
                 }
             }
             .navigationTitle("Live TV")
+            .searchable(text: $filter, prompt: "Filter channels")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSources = true } label: { Image(systemName: "gearshape") }
@@ -58,12 +60,30 @@ struct IPTVView: View {
         }
     }
 
+    // Filtered pairs of (channel, original index) so playback still uses the
+    // correct /api/tv index. SwiftUI's List is lazy — only visible rows render.
+    private var filtered: [(IPTVChannel, Int)] {
+        let q = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let pairs = channels.enumerated().map { ($0.element, $0.offset) }
+        if q.isEmpty { return pairs }
+        return pairs.filter { $0.0.name.lowercased().contains(q) || ($0.0.group ?? "").lowercased().contains(q) }
+    }
+
     func load() async {
         loading = true
-        // Read the same store /api/tv uses (M3U uploads + Xtream imports).
+        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("iptv-channels.json")
+        // Show last-known channels from disk instantly while refreshing.
+        if channels.isEmpty,
+           let cached = try? Data(contentsOf: cacheURL),
+           let d = try? JSONDecoder().decode(TVData.self, from: cached) {
+            channels = d.channels ?? []
+        }
         let data = try? await URLSession.shared.data(from: URL(string: "\(settings.serverURL)/api/tv")!).0
-        let d = try? JSONDecoder().decode(TVData.self, from: data ?? Data())
-        channels = d?.channels ?? []
+        if let data, let d = try? JSONDecoder().decode(TVData.self, from: data) {
+            channels = d.channels ?? []
+            try? data.write(to: cacheURL)
+        }
         loading = false
     }
 
