@@ -28,15 +28,17 @@ async function fromRqbitApi(host, label) {
   const list = await getJson(`${host}/torrents`);
   const out = [];
   for (const t of list.torrents || []) {
-    let stats = null;
+    let stats = null, detail = null;
     try { stats = await getJson(`${host}/torrents/${t.id}/stats`, 4000); } catch {}
+    try { detail = await getJson(`${host}/torrents/${t.id}`, 4000); } catch {}
     const snap = stats?.snapshot || {};
     const fetched = Number(snap.fetched_bytes ?? snap.downloaded_and_checked_bytes ?? 0);
     const speed = stats?.download_speed?.human_readable || "0 B/s";
     const peers = Number(snap.peer_stats?.live ?? 0);
     const seeders = Number(snap.peer_stats?.live_seeders ?? 0);
-    // We don't know total size from stats; rqbit list often carries it.
-    const size = Number(t.size ?? t.total_bytes ?? 0);
+    // Total size lives in the file list, not the torrent list — sum the files.
+    const files = detail?.files || detail?.details?.files || [];
+    const size = files.reduce((n, f) => n + Number(f.length ?? f.file_length ?? f.size ?? 0), 0) || Number(t.size ?? t.total_bytes ?? 0);
     const progress = size > 0 ? Math.min(100, Math.round((fetched / size) * 100)) : null;
     out.push({
       engine: label,
