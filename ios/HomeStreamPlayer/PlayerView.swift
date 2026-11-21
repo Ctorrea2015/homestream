@@ -43,7 +43,7 @@ struct PlayerView: View {
                     VStack(spacing: 6) {
                         Text(fmt(time)).font(.caption).monospacedDigit()
                         Slider(value: $position, in: 0...1)
-                            .onChange(of: position) { _, v in saved.set(v, forKey: resumeKey) }
+                            .onChange(of: position) { v in saved.set(v, forKey: resumeKey) }
                         HStack {
                             Button { saved.removeObject(forKey: resumeKey); playerID += 1 } label: {
                                 Label("Restart", systemImage: "gobackward.10")

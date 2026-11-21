@@ -4,10 +4,18 @@ struct DetailView: View {
     let meta: API.Meta
     let type: String
     @EnvironmentObject var settings: Settings
-    @State private var season = 1, episode = 1
+    @State private var season = 1
+    @State private var episode = 1
     @State private var loading = false
     @State private var error = ""
     @State private var playing: API.Stream?
+
+    // Explicit init: @EnvironmentObject makes the memberwise initializer
+    // private, so callers in BrowseView can't construct DetailView otherwise.
+    init(meta: API.Meta, type: String) {
+        self.meta = meta
+        self.type = type
+    }
 
     var isSeries: Bool { (type == "series") || (meta.type ?? "") == "series" }
 

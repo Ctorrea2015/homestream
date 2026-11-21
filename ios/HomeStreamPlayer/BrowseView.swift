@@ -73,7 +73,7 @@ struct SearchView: View {
         // Search via Cinemeta, then open through HomeStream's resolve.
         let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         guard let u = URL(string: "https://v3-cinemeta.strem.io/catalog/movie/top/search=\(q).json") else { return }
-        let (data, _) = try? await URLSession.shared.data(from: u)
+        let data = try? await URLSession.shared.data(from: u).0
         results = (try? JSONDecoder().decode(Catalog.self, from: data ?? Data()))?.metas ?? []
     }
     struct Catalog: Decodable { let metas: [API.Meta] }

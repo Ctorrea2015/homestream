@@ -39,11 +39,11 @@ struct VLCPlayerView: UIViewRepresentable {
         init(onProgress: @escaping (Float, TimeInterval) -> Void, onFinished: @escaping () -> Void) {
             self.onProgress = onProgress; self.onFinished = onFinished
         }
-        func mediaPlayerTimeChanged(_ aNotification: Notification!) {
+        func mediaPlayerTimeChanged(_ aNotification: Notification) {
             guard let p = player else { return }
             onProgress(p.position, TimeInterval(p.time.intValue))
         }
-        func mediaPlayerStateChanged(_ aNotification: Notification!) {
+        func mediaPlayerStateChanged(_ aNotification: Notification) {
             guard let p = player else { return }
             if p.state == .ended { onFinished() }
         }
