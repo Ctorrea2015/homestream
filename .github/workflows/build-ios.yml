@@ -20,12 +20,16 @@ jobs:
       - name: Install XcodeGen + CocoaPods
         run: |
           brew install xcodegen cocoapods
+          xcodegen --version
+          pod --version
 
-      - name: Generate project + install VLCKit
+      - name: Generate project
         working-directory: ios
-        run: |
-          xcodegen generate
-          pod install --repo-update
+        run: xcodegen generate --verbose
+
+      - name: Install VLCKit (pods)
+        working-directory: ios
+        run: pod install --repo-update --verbose
 
       - name: Set development team (optional)
         if: ${{ vars.DEVELOPMENT_TEAM != '' }}
