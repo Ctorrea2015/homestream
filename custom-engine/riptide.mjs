@@ -56,7 +56,9 @@ const PORT = Number(CFG.port || 3031);
 function scrapeTracker(host, port, hashBuf) {
   return new Promise((resolve) => {
     const sock = dgram.createSocket("udp4");
-    const timer = setTimeout(() => { try { sock.close(); } catch {} resolve(null); }, 3000);
+    const finish = (val) => { clearTimeout(timer); try { sock.close(); } catch {} resolve(val); };
+    sock.on("error", () => finish(null)); // ICMP port-unreachable must NOT crash the engine
+    const timer = setTimeout(() => finish(null), 3000);
     sock.once("message", (msg) => {
       try {
         if (msg.length < 16) throw new Error("short");
@@ -93,7 +95,9 @@ async function verifySeeders(infoHash) {
   const buf = Buffer.from(infoHash, "hex");
   if (buf.length !== 20) return 0;
   const results = await Promise.allSettled(CFG.scrapers.map((s) => scrapeTracker(s.host, s.port, buf)));
-  return results.reduce((n, r) => n + (r.status === "fulfilled" && r.value ? r.value.seeders : 0), 0);
+  const ok = results.filter((r) => r.status === "fulfilled" && r.value);
+  if (!ok.length) return -1; // all scrapers failed → UNKNOWN, don't gate on it
+  return ok.reduce((n, r) => n + r.value.seeders, 0);
 }
 
 /* ---------------------------- helpers ---------------------------------- */
@@ -345,7 +349,9 @@ http.createServer(async (req, res) => {
       // rejected immediately (HTTP 409), so HomeStream's resolver moves to
       // its next ranked candidate instead of stalling at 0 bytes.
       const seeders = await verifySeeders(hash);
-      if (CFG.seederGate && seeders < (CFG.minSeeders || 1)) {
+      // -1 = scrapers unreachable (unknown, not dead) → fail OPEN rather than
+      // rejecting a healthy swarm because UDP is blocked on this network.
+      if (CFG.seederGate && seeders >= 0 && seeders < (CFG.minSeeders || 1)) {
         console.log(`[engine] seeder gate: REJECTED ${hash.slice(0, 10)} — ${seeders} real seeders`);
         return j(res, 409, { error_kind: "dead_swarm", human_readable: `no live seeders (${seeders}) — try another source`, seeders });
       }
