@@ -52,6 +52,15 @@ function startSegmenter(index, url, ffmpeg) {
 }
 
 export async function GET(request) {
+  try {
+    return await hlsHandler(request);
+  } catch (e) {
+    console.error("[hls] exception:", String(e?.stack || e).slice(0, 300));
+    return NextResponse.json({ error: `HLS error: ${String(e?.message || e).slice(0, 120)}` }, { status: 500 });
+  }
+}
+
+async function hlsHandler(request) {
   const sp = new URL(request.url).searchParams;
   const index = Number(sp.get("index"));
   if (!Number.isInteger(index) || index < 0) return NextResponse.json({ error: "Provide a channel index" }, { status: 400 });
