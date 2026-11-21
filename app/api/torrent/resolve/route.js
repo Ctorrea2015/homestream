@@ -164,7 +164,7 @@ async function resolve(request, body) {
       if (!loaded) {
         // Fallback loader: qB (disk-based, for sources rqbit can't resolve).
         try {
-          const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 60000 });
+          const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 15000 });
           if (q) {
             loaded = { name: q.name, size: q.size };
             engine = "qb";
