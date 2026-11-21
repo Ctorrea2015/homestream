@@ -23,6 +23,32 @@ Make Riptide engine #1 by enabling it:
 
 With that file, both the stream route and ⚡ Auto resolver try **Riptide first**, then fall back to the stock rqbit daemon, then qB, then webtorrent. Remove the file (or set `enabled: false`) to go back to rqbit-first.
 
+## Auto-start on boot (systemd)
+
+A `nohup` process dies on reboot — install the included service so Riptide always comes back:
+
+```bash
+# one-time install (on the Pi)
+sudo cp ~/homestream/custom-engine/riptide.service /etc/systemd/system/riptide.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now riptide
+
+# check it
+systemctl status riptide --no-pager
+curl http://127.0.0.1:3031/     # engine: Riptide, backend: qb
+
+# logs
+journalctl -u riptide -f
+```
+
+After a `git pull`, restart it to pick up code changes:
+
+```bash
+sudo systemctl restart riptide
+```
+
+Riptide reads its config on startup, so restart after editing `riptide-config.json` or `.data/qbittorrent.json` too.
+
 Config: `custom-engine/riptide-config.json`
 
 ## Why it's better than rqbit here

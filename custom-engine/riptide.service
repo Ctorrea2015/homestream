@@ -1,0 +1,17 @@
+[Unit]
+Description=Riptide streaming engine for HomeStream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ctorres19956
+WorkingDirectory=/home/ctorres19956/homestream/custom-engine
+ExecStart=/usr/bin/node /home/ctorres19956/homestream/custom-engine/riptide.mjs
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
