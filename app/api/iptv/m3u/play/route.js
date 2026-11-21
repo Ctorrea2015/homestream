@@ -36,6 +36,11 @@ function proxy(url, reqHeaders = {}) {
 
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
+  // Origin the client actually used (Host header) — never request.url.origin,
+  // which is the bind address (0.0.0.0) and unreachable from a device.
+  const host = request.headers.get("host") || "localhost:3000";
+  const proto = (request.headers.get("x-forwarded-proto") || "http").split(",")[0];
+  const self = `${proto}://${host}`;
   const seg = sp.get("seg");
   // Raw mode: pipe a single TS/channel stream (used by the generated HLS
   // playlist above, and by rewritten playlist segments).
@@ -84,7 +89,6 @@ export async function GET(request) {
   // (These provider channels use .ts URLs; piping raw bytes directly makes
   // AVPlayer fail because it only understands HLS, not a bare TS byte stream.)
   if (!/\.m3u8?(\?|$)/i.test(ch.url)) {
-    const self = new URL(request.url).origin;
     const rawURL = `${self}/api/iptv/m3u/play?index=${index}&raw=1`;
     const playlist = [
       "#EXTM3U",
@@ -111,11 +115,11 @@ export async function GET(request) {
           // rewrite URI= inside #EXT-X-KEY
           return t.replace(/URI="([^"]+)"/g, (_m, u) => {
             const abs = new URL(u, base).toString();
-            return `URI="${new URL(`/api/iptv/m3u/play?seg=${encodeURIComponent(abs)}`, request.url).toString()}"`;
+            return `URI="${self}/api/iptv/m3u/play?seg=${encodeURIComponent(abs)}"`;
           });
         }
         const abs = new URL(t, base).toString();
-        return `/api/iptv/m3u/play?seg=${encodeURIComponent(abs)}`;
+        return `${self}/api/iptv/m3u/play?seg=${encodeURIComponent(abs)}`;
       }).join("\n");
       return new Response(rewritten, { headers: { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" } });
     }
