@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14           # Apple Silicon runner with modern Xcode
+    runs-on: macos-13           # Intel runner, available on free GitHub accounts
     steps:
       - uses: actions/checkout@v4
 
