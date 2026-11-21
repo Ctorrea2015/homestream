@@ -7,6 +7,7 @@ struct IPTVView: View {
     @State private var filter = ""
     @State private var loading = true
     @State private var msg = ""
+    @State private var loadError = ""
     @State private var playingIndex: Int? = nil
     @State private var showSources = false
 
@@ -14,6 +15,15 @@ struct IPTVView: View {
         NavigationStack {
             Group {
                 if loading { ProgressView("Loading channels…") }
+                else if !loadError.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "wifi.exclamationmark").font(.system(size: 40)).foregroundStyle(.orange)
+                        Text("Couldn't load channels").font(.headline)
+                        Text(loadError).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Text("Server: \(settings.serverURL)").font(.caption2).foregroundStyle(.secondary)
+                        Button("Retry") { Task { await load() } }.buttonStyle(.borderedProminent)
+                    }.padding()
+                }
                 else if channels.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "tv").font(.system(size: 44)).foregroundStyle(.secondary)
@@ -79,10 +89,16 @@ struct IPTVView: View {
            let d = try? JSONDecoder().decode(TVData.self, from: cached) {
             channels = d.channels ?? []
         }
-        let data = try? await URLSession.shared.data(from: URL(string: "\(settings.serverURL)/api/tv")!).0
-        if let data, let d = try? JSONDecoder().decode(TVData.self, from: data) {
-            channels = d.channels ?? []
-            try? data.write(to: cacheURL)
+        do {
+            let (data, res) = try await URLSession.shared.data(from: URL(string: "\(settings.serverURL)/api/tv")!)
+            guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "http", code: (res as? HTTPURLResponse)?.statusCode ?? 0) }
+            if let d = try? JSONDecoder().decode(TVData.self, from: data), let ch = d.channels {
+                channels = ch
+                try? data.write(to: cacheURL)
+                loadError = ""
+            } else { loadError = "Couldn't read channel data from server" }
+        } catch let e {
+            loadError = "\(e.localizedDescription) — check the server URL in Settings"
         }
         loading = false
     }
