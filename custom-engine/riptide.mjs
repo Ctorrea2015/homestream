@@ -58,7 +58,7 @@ function scrapeTracker(host, port, hashBuf) {
     const sock = dgram.createSocket("udp4");
     const finish = (val) => { clearTimeout(timer); try { sock.close(); } catch {} resolve(val); };
     sock.on("error", () => finish(null)); // ICMP port-unreachable must NOT crash the engine
-    const timer = setTimeout(() => finish(null), 3000);
+    const timer = setTimeout(() => finish(null), 1200);
     sock.once("message", (msg) => {
       try {
         if (msg.length < 16) throw new Error("short");
