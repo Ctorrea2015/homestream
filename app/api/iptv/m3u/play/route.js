@@ -84,14 +84,20 @@ export async function GET(request) {
   const ch = (data?.channels || [])[index];
   if (!ch?.url) return NextResponse.json({ error: "Channel not found — upload a playlist first" }, { status: 404 });
 
-  // Raw TS / non-HLS stream: delegate to the real HLS segmenter. A fake
-  // playlist with one never-ending segment makes players stop after ~4s
-  // ("channel closes by itself"). The segmenter produces real rolling
-  // segments that any player (Samsung TV included) streams continuously.
+  // Raw TS / non-HLS stream: wrap it in a tiny generated HLS playlist so
+  // AVPlayer can play it natively. (The ffmpeg segmenter is still being
+  // debugged — this path is known to play, so keep it as the live default.)
   if (!/\.m3u8?(\?|$)/i.test(ch.url)) {
-    const host = request.headers.get("host") || "localhost:3000";
-    const proto = (request.headers.get("x-forwarded-proto") || "http").split(",")[0];
-    return NextResponse.redirect(`${proto}://${host}/api/iptv/hls?index=${index}`, { status: 302 });
+    const rawURL = `${self}/api/iptv/m3u/play?index=${index}&raw=1`;
+    const playlist = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:3",
+      "#EXT-X-TARGETDURATION:4",
+      "#EXT-X-MEDIA-SEQUENCE:0",
+      `#EXTINF:4.000,`,
+      rawURL,
+    ].join("\n") + "\n";
+    return new Response(playlist, { headers: { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" } });
   }
 
   // Rewrite .m3u8 playlist segment URLs to come back through this endpoint.
