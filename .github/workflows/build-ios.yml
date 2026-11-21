@@ -25,7 +25,7 @@ jobs:
 
       - name: Generate project
         working-directory: ios
-        run: xcodegen generate --verbose
+        run: xcodegen generate
 
       - name: Install VLCKit (pods)
         working-directory: ios
