@@ -86,7 +86,8 @@ async function hlsHandler(request) {
 
   let e = running.get(index);
   if (!e || e.proc.exitCode !== null || Date.now() - e.at > 6 * 60 * 60 * 1000) {
-    const ffmpeg = await findFfmpeg();
+    const found = await findFfmpeg();
+    const ffmpeg = typeof found === "string" ? found : found?.ffmpeg;
     if (!ffmpeg) return NextResponse.json({ error: "ffmpeg not available for HLS segmentation" }, { status: 502 });
     e = startSegmenter(index, ch.url, ffmpeg);
   }
