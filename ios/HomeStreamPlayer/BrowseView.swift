@@ -18,20 +18,12 @@ struct BrowseView: View {
     @EnvironmentObject var settings: Settings
     @State private var items: [API.Meta] = []
     @State private var error = ""
-    private let api = API(base: URL(string: "http://100.93.204.117:3000")!) // replaced on appear
-
     var body: some View {
         NavigationStack {
             Group {
                 if !error.isEmpty { Text(error).foregroundStyle(.secondary) }
                 else if items.isEmpty { ProgressView("Loading…") }
-                else {
-                    List(items) { m in
-                        NavigationLink(value: m) {
-                            MetaRow(meta: m)
-                        }
-                    }
-                }
+                else { List(items) { m in NavigationLink(value: m) { MetaRow(meta: m) } } }
             }
             .navigationTitle(type == "movie" ? "Movies" : "Shows")
             .navigationDestination(for: API.Meta.self) { m in DetailView(meta: m, type: type) }
@@ -60,21 +52,40 @@ struct SearchView: View {
     @EnvironmentObject var settings: Settings
     @State private var query = ""
     @State private var results: [API.Meta] = []
+    @State private var searching = false
+
     var body: some View {
         NavigationStack {
-            List(results) { m in NavigationLink(value: m) { MetaRow(meta: m) } }
-                .navigationDestination(for: API.Meta.self) { m in DetailView(meta: m, type: (m.type ?? "movie")) }
-                .searchable(text: $query)
-                .navigationTitle("Search")
-                .onSubmit { Task { await search() } }
+            Group {
+                if searching { ProgressView("Searching…") }
+                else if !query.isEmpty && results.isEmpty {
+                    Text("No results for \"\(query)\"").foregroundStyle(.secondary)
+                } else if results.isEmpty {
+                    Text("Type a movie or show title above").foregroundStyle(.secondary)
+                } else {
+                    List(results) { m in NavigationLink(value: m) { MetaRow(meta: m) } }
+                }
+            }
+            .navigationDestination(for: API.Meta.self) { m in DetailView(meta: m, type: (m.type ?? "movie")) }
+            .searchable(text: $query, prompt: "Movie or show title")
+            .navigationTitle("Search")
+            // Live search as you type — no need to press return.
+            .task(id: query) { await search(query) }
         }
     }
-    func search() async {
-        // Search via Cinemeta, then open through HomeStream's resolve.
-        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let u = URL(string: "https://v3-cinemeta.strem.io/catalog/movie/top/search=\(q).json") else { return }
-        let data = try? await URLSession.shared.data(from: u).0
-        results = (try? JSONDecoder().decode(Catalog.self, from: data ?? Data()))?.metas ?? []
+
+    func search(_ text: String) async {
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { results = []; return }
+        searching = true
+        // Strict percent-encoding (spaces -> %20, not '+') so Cinemeta parses it.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let enc = q.addingPercentEncoding(withAllowedCharacters: allowed) ?? q
+        let urlStr = "https://cinemeta-live.strem.io/catalog/movie/top/search=\(enc).json"
+        let data = try? await URLSession.shared.data(from: URL(string: urlStr)!).0
+        let found = (try? JSONDecoder().decode(Catalog.self, from: data ?? Data()))?.metas ?? []
+        results = found
+        searching = false
     }
     struct Catalog: Decodable { let metas: [API.Meta] }
 }
