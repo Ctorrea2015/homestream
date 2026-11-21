@@ -1,0 +1,58 @@
+name: Build HomeStream Player (IPA)
+
+# Builds the native iPhone app on GitHub's macOS runner and attaches a signed
+# .ipa you can sideload with Sideloadly / AltStore. Your old Mac is not needed.
+on:
+  workflow_dispatch:            # run manually from the Actions tab
+  push:
+    paths:
+      - 'ios/**'
+
+jobs:
+  build:
+    runs-on: macos-14           # Apple Silicon runner with modern Xcode
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install XcodeGen + CocoaPods
+        run: |
+          brew install xcodegen cocoapods
+
+      - name: Generate project + install VLCKit
+        working-directory: ios
+        run: |
+          xcodegen generate
+          pod install --repo-update
+
+      - name: Set development team (optional)
+        if: ${{ vars.DEVELOPMENT_TEAM != '' }}
+        working-directory: ios
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :objects:*:buildSettings:DEVELOPMENT_TEAM ${{ vars.DEVELOPMENT_TEAM }}" HomeStreamPlayer.xcodeproj/project.pbxproj || true
+
+      - name: Build (unsigned IPA)
+        working-directory: ios
+        run: |
+          xcodebuild -workspace HomeStreamPlayer.xcworkspace \
+            -scheme HomeStreamPlayer \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath $PWD/build/HomeStreamPlayer.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p build/Payload
+          cp -R build/HomeStreamPlayer.xcarchive/Products/Applications/HomeStreamPlayer.app build/Payload/
+          cd build && zip -qr HomeStreamPlayer.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HomeStreamPlayer-ipa
+          path: ios/build/HomeStreamPlayer.ipa
