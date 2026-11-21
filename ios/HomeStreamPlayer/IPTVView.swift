@@ -29,8 +29,8 @@ struct IPTVView: View {
                                 } placeholder: { Image(systemName: "tv").frame(width: 40, height: 40) }
                                 VStack(alignment: .leading) {
                                     Text(channels[i].name).foregroundStyle(.primary)
-                                    if !channels[i].group.isEmpty {
-                                        Text(channels[i].group).font(.caption2).foregroundStyle(.secondary)
+                                    if let grp = channels[i].group, !grp.isEmpty {
+                                        Text(grp).font(.caption2).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -61,7 +61,7 @@ struct IPTVView: View {
     func load() async {
         loading = true
         // Read the same store /api/tv uses (M3U uploads + Xtream imports).
-        let (data, _) = try? await URLSession.shared.data(from: URL(string: "\(settings.serverURL)/api/tv")!)
+        let data = try? await URLSession.shared.data(from: URL(string: "\(settings.serverURL)/api/tv")!).0
         let d = try? JSONDecoder().decode(TVData.self, from: data ?? Data())
         channels = d?.channels ?? []
         loading = false
@@ -87,7 +87,9 @@ struct SourcesView: View {
     @State private var mode = 0
     @State private var m3uURL = ""
     @State private var m3uText = ""
-    @State private var host = "", user = "", pass = ""
+    @State private var host = ""
+    @State private var user = ""
+    @State private var pass = ""
     @State private var status = ""
 
     var body: some View {
@@ -125,7 +127,9 @@ struct SourcesView: View {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        let (data, res) = try? await URLSession.shared.data(for: req)
+        let result = try? await URLSession.shared.data(for: req)
+        let data = result?.0
+        let res = result?.1
         let ok = (res as? HTTPURLResponse)?.statusCode == 200
         let j = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]) ?? [:]
         status = ok ? "✅ \(j["added"] ?? j["ok"] ?? "Saved")" : "❌ \(j["error"] ?? "Failed")"
