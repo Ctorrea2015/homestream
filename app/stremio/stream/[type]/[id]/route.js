@@ -4,10 +4,12 @@ import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { readLibrary } from "@/lib/videos";
 import { rankStreams } from "@/lib/rankStreams";
 import { showIdFor } from "@/lib/videos";
-import { rqEnsureTorrent } from "@/lib/rqbit";
+import { rqEnsureTorrent, riptideHost } from "@/lib/rqbit";
 import { touchStream } from "@/lib/idleTorrents";
 import { tpbFallbackStreams } from "@/lib/tpb";
 import { customEngineStreams } from "@/lib/customEngine";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,11 +34,21 @@ const tpbTried = new Map();
  * Bounds (deliberate — this must never become a hoarder):
  *   • one infoHash prefetched at a time (globalThis registry)
  *   • one episode's bytes only (streamUrl is the focused file)
+ *   • a CAP on how much is pulled (PREFETCH_CAP_MB) — never the whole season
  *   • the janitor's 30-min idle rule still deletes it untouched
  *   • the stream route's head+tail + warm-up hold keep working for any
  *     episode that isn't prefetched yet (prefetch is best-effort)
+ *
+ * Speed: larger chunks (16 MB) + 2 reads in flight so the swarm gets ahead
+ * of playback quickly. Config via .data/prefetch.json:
+ *   { "chunkMB": 16, "parallel": 2, "capMB": 300 }
  */
-const PREFETCH_CHUNK = 4 * 1024 * 1024; // 4 MB per read
+
+const PREFETCH_DEFAULTS = { chunkMB: 16, parallel: 2, capMB: 300 };
+async function prefetchCfg() {
+  try { return { ...PREFETCH_DEFAULTS, ...JSON.parse(await fs.readFile(path.join(process.cwd(), ".data", "prefetch.json"), "utf8")) }; }
+  catch { return PREFETCH_DEFAULTS; }
+}
 
 async function prefetchEpisode(streamUrl, size, infoHash) {
   const g = globalThis;
@@ -46,21 +58,34 @@ async function prefetchEpisode(streamUrl, size, infoHash) {
   if (inflight.has(key)) return; // already pulling this torrent
   inflight.add(key);
   const started = Date.now();
-  console.log(`[prefetch] pulling ${(size / 1048576).toFixed(0)} MB for ${key.slice(0, 10)}… (episode only, janitor still owns it)`);
+  const cfg = await prefetchCfg();
+  const chunk = Math.max(1, Number(cfg.chunkMB) || 16) * 1024 * 1024;
+  const parallel = Math.max(1, Math.min(6, Number(cfg.parallel) || 2));
+  const cap = Math.max(1, Number(cfg.capMB) || 300) * 1024 * 1024;
+  const total = Math.min(size, cap); // cap — never pull a whole 100 GB pack
+  const ranges = [];
+  for (let i = 0; i < total; i += chunk) ranges.push([i, Math.min(i + chunk, total) - 1]);
+  console.log(`[prefetch] pulling ${(total / 1048576).toFixed(0)}/${(size / 1048576).toFixed(0)} MB for ${key.slice(0, 10)}… in ${ranges.length} chunks ×${parallel} (cap ${cfg.capMB} MB)`);
   try {
-    for (let i = 0; i < size; i += PREFETCH_CHUNK) {
-      const end = Math.min(i + PREFETCH_CHUNK, size) - 1;
-      const res = await fetch(streamUrl, {
-        headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", Range: `bytes=${i}-${end}` },
-        signal: AbortSignal.timeout(90_000),
-      });
-      if (!res.ok && res.status !== 206) break; // engine lost it — stop quietly
-      await res.arrayBuffer(); // read the bytes through (drives prioritization)
-    }
-    console.log(`[prefetch] ${key.slice(0, 10)}… done in ${Math.round((Date.now() - started) / 1000)}s`);
+    // Bounded parallel workers: each pulls a distinct range. Range requests
+    // through the stream endpoint are idempotent — overlapping pulls are fine
+    // and they all drive rqbit/Riptide's piece prioritization.
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ranges.length) {
+        const [start, end] = ranges[cursor++];
+        try {
+          const res = await fetch(streamUrl, {
+            headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", Range: `bytes=${start}-${end}` },
+            signal: AbortSignal.timeout(120_000),
+          });
+          if (res.ok || res.status === 206) await res.arrayBuffer(); // read through = prioritization hint
+        } catch { /* one chunk failed — keep going with the rest */ }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(parallel, ranges.length) }, worker));
+    console.log(`[prefetch] ${key.slice(0, 10)}… done in ${Math.round((Date.now() - started) / 1000)}s (${(total / 1048576).toFixed(0)} MB)`);
   } catch {
-    // engine deleted (janitor), swarm died, or timeout — prefetch is
-    // best-effort; the stream route's warm-up hold still covers playback
     console.log(`[prefetch] ${key.slice(0, 10)}… stopped early (best-effort)`);
   } finally {
     inflight.delete(key);
@@ -207,7 +232,7 @@ export async function GET(request, { params }) {
     auto.searchParams.set("id", torrentId);
     auto.searchParams.set("type", type);
     streams.push({
-      title: "⚡ Auto — best source, already on rqbit",
+      title: "⚡ Auto — best source, already pre-warmed",
       url: auto.toString(),
       behaviorHints: { notWebReady: true },
     });
@@ -233,12 +258,26 @@ export async function GET(request, { params }) {
           // the PREVIOUS episode's timestamp and deletes it minutes after
           // pre-warm (the Fear Factor ep3 kill, 2026-11-16).
           touchStream(h);
-          rqEnsureTorrent({ infoHash: h, nameHint: hint, trackers: trs })
-            .then((r) => {
-              if (r?.streamUrl && r?.size) prefetchEpisode(r.streamUrl, r.size, h);
-            })
+          // Pre-warm on the PRIMARY engine (Riptide when configured, rqbit
+          // otherwise) — otherwise the prefetch warms rqbit while playback
+          // uses Riptide, wasting the whole effort. Falls back if needed.
+          (async () => {
+            const host = await riptideHost();
+            try {
+              const r = await rqEnsureTorrent({ infoHash: h, nameHint: hint, trackers: trs, host });
+              if (r?.streamUrl && r?.size) return r;
+            } catch {}
+            if (host) { // Riptide failed — try the stock rqbit daemon
+              try {
+                const r = await rqEnsureTorrent({ infoHash: h, nameHint: hint, trackers: trs });
+                if (r?.streamUrl && r?.size) return r;
+              } catch {}
+            }
+            return null;
+          })()
+            .then((r) => { if (r) prefetchEpisode(r.streamUrl, r.size, h); })
             .catch(() => {}); // fire-and-forget
-          console.log(`[stremio] pre-warming best torrent source ${h.slice(0, 10)}… (${(best.title || "").slice(0, 60)})`);
+          console.log(`[stremio] pre-warming best torrent source ${h.slice(0, 10)}… on ${(await riptideHost()) ? "Riptide" : "rqbit"}`);
         }
       }
     }
