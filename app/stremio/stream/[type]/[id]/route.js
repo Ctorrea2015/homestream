@@ -10,6 +10,7 @@ import { tpbFallbackStreams } from "@/lib/tpb";
 import { customEngineStreams } from "@/lib/customEngine";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { recordWarm } from "@/lib/warmHandoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -253,6 +254,9 @@ export async function GET(request, { params }) {
         const trs = abs0.searchParams.getAll("tr");
         if (h && /^[a-f0-9]{40}$/i.test(h)) {
           h = h.toLowerCase();
+          // Remember this hash so ⚡ Auto plays the SAME warmed torrent —
+          // not a fresh re-resolve that starts cold and makes the player quit.
+          recordWarm(`${type}|${torrentId}`, h);
           // Mark liveness NOW: all episodes of a season often share ONE pack
           // infoHash — without a fresh touch, the janitor judges it idle from
           // the PREVIOUS episode's timestamp and deletes it minutes after

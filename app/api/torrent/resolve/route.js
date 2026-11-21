@@ -6,6 +6,7 @@ import { rqEnsureTorrent, rqWaitForData, riptideHost } from "@/lib/rqbit";
 import { tpbFallbackStreams } from "@/lib/tpb";
 import { customEngineStreams } from "@/lib/customEngine";
 import { touchStream } from "@/lib/idleTorrents";
+import { warmHash } from "@/lib/warmHandoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,6 +113,17 @@ async function resolve(request, body) {
   //    Both engines return the SAME /api/torrent/stream URL (abs) — but
   //    pre-loading here means data is already flowing when the player connects.
   const ranked = rankStreams(candidates);
+  // Reuse the prefetched torrent for this title if it's still among the
+  // candidates (same swarm, already downloading) — put it first so the player
+  // connects to warm bytes instead of a cold source.
+  const warmed = warmHash(`${p.type}|${p.torrentId}`);
+  if (warmed) {
+    const i = ranked.findIndex((s) => {
+      const u = new URL(s.url, base);
+      return u.searchParams.get("infoHash")?.toLowerCase() === warmed;
+    });
+    if (i > 0) ranked.unshift(ranked.splice(i, 1)[0]);
+  }
   const epTag = p.type === "series" && p.season && p.episode
     ? ` S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(3, "0")}`
     : "";
