@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13           # Intel runner, available on free GitHub accounts
+    runs-on: macos-latest        # currently supported macOS runner (ARM)
     steps:
       - uses: actions/checkout@v4
 
