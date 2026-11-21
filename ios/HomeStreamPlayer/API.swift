@@ -20,7 +20,6 @@ struct API {
         let behaviorHints: Hint?
         enum CodingKeys: String, CodingKey { case title, url, behaviorHints }
         struct Hint: Decodable { let notWebReady: Bool? }
-        struct Hint: Decodable { let notWebReady: Bool? }
         var streamURL: URL? { URL(string: url) }
         var isAuto: Bool { title.contains("Auto") }
     }
