@@ -460,3 +460,30 @@ video { width: 100%; max-height: 70vh; display: block; background: #000; }
   white-space: nowrap;
 }
 .ep:hover { border-color: var(--accent); }
+/* ---------- /downloads status page ---------- */
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 4% 60px; }
+.wrap .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.wrap h1 { font-size: 26px; margin: 0; }
+.wrap .sub { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+.bar-actions { display: flex; gap: 12px; align-items: center; }
+.bar-actions a, .bar-actions button { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 7px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.error { background: #3a1414; border: 1px solid #7a2a2a; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+.empty { text-align: center; padding: 80px 20px; color: var(--muted); }
+.empty-glyph { font-size: 60px; opacity: 0.5; }
+.empty h2 { color: var(--text); margin: 12px 0 4px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+.wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wrap th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 11px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.wrap td { padding: 11px 12px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
+.wrap tr:last-child td { border-bottom: none; }
+td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.engine { font-weight: 700; font-size: 12px; }
+.muted { color: var(--muted); }
+.speed { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.peers { white-space: nowrap; }
+.progress { position: relative; width: 96px; height: 18px; background: var(--surface-2); border-radius: 9px; overflow: hidden; }
+.progress .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.progress span { position: relative; z-index: 1; display: block; text-align: center; font-size: 11px; line-height: 18px; }
+.status { font-size: 12px; text-transform: capitalize; }
+.status.warn { color: #ffb454; }
+.foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 16px; }
