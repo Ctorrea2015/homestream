@@ -206,11 +206,20 @@ const qbb = {
       ];
       addBody = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p)));
       const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { ...cookieHeader, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
-      if (!r.ok) throw new Error(`qB add -> HTTP ${r.status}`);
+      if (!r.ok && r.status !== 409) throw new Error(`qB add -> HTTP ${r.status}`);
     } else {
+      // qB returns 409 "torrent already exists" if it's still in qB from a
+      // previous play — that's SUCCESS for us, not a failure. Otherwise the
+      // resolver falls back to rqbit (slow, no seeder gate/prefetch).
       const form = new URLSearchParams({ urls: String(body || "") });
       if (trackers.length) form.set("tr", trackers.join("\n"));
-      await qb("/torrents/add", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form });
+      const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, {
+        method: "POST",
+        headers: { ...cookieHeader, "Content-Type": "application/x-www-form-urlencoded" },
+        body: form,
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!r.ok && r.status !== 409) throw new Error(`qB add -> HTTP ${r.status}`);
     }
     // wait for qB to register the hash
     for (let i = 0; i < 30; i++) {
@@ -341,6 +350,32 @@ setInterval(async () => {
     for (const [id, e] of [...liveness].sort((a, b) => a[1].at - b[1].at).slice(0, liveness.size - MAX_STATE)) liveness.delete(id);
   }
 }, 5000).unref?.();
+
+// Startup sweep: after a restart, `liveness` is empty but qB may still hold
+// old torrents from prior plays. Those cause HTTP 409 on add → Riptide fails →
+// resolver falls to rqbit (slow). Delete qB torrents with 0 peers AND 0 bytes
+// that aren't in liveness. Safe: a watched torrent has peers/bytes and would
+// never be touched; any 0/0 entry is a dead leftover.
+if (CFG.backend === "qb") {
+  setTimeout(async () => {
+    try {
+      const all = await BE.list();
+      let n = 0;
+      for (const t of all) {
+        if (liveness.has(String(t.id))) continue;
+        try {
+          const s = await BE.stats(t.id);
+          const snap = s?.snapshot || {};
+          if (Number(snap.peer_stats?.live ?? 0) === 0 && Number(snap.fetched_bytes ?? 0) === 0) {
+            await BE.delete(t.id);
+            n++;
+          }
+        } catch {}
+      }
+      if (n) console.log(`[engine] startup sweep: removed ${n} dead qB torrent(s)`);
+    } catch {}
+  }, 8000).unref?.();
+}
 
 http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://localhost");
