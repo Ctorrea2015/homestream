@@ -1,0 +1,77 @@
+import Foundation
+
+/// Thin client for HomeStream's addon surface. All playback goes through the
+/// server's engines — the app just gets stream URLs and lets VLC play them.
+struct API {
+    let base: URL
+
+    struct Meta: Identifiable, Decodable, Hashable {
+        let id: String
+        let type: String?
+        let name: String
+        let poster: String?
+        var posterURL: URL? { poster.flatMap { URL(string: $0) } }
+    }
+
+    struct Stream: Identifiable, Decodable {
+        let id = UUID()
+        let title: String
+        let url: String
+        let behaviorHints: Hint?
+        struct Hint: Decodable { let notWebReady: Bool? }
+        var streamURL: URL? { URL(string: url) }
+        var isAuto: Bool { title.contains("Auto") }
+    }
+
+    private func get(_ path: String) async throws -> Data {
+        var url = base.appendingPathComponent(path)
+        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        c.percentEncodedPath = c.path // keep ':' in series ids
+        url = c.url!
+        let (data, res) = try await URLSession.shared.data(from: url)
+        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.http((res as? HTTPURLResponse)?.statusCode ?? 0) }
+        return data
+    }
+
+    enum APIError: Error { case http(Int) }
+
+    /// Catalog rows — Cinemeta's Popular rows (the Pi's own library catalog is
+    /// empty when you stream everything, so use real titles for discovery).
+    func catalog(type: String) async throws -> [Meta] {
+        let u = URL(string: "https://v3-cinemeta.strem.io/catalog/\(type)/top.json")!
+        let (data, res) = try await URLSession.shared.data(from: u)
+        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.http((res as? HTTPURLResponse)?.statusCode ?? 0) }
+        return (try? JSONDecoder().decode(CatalogResponse.self, from: data))?.metas ?? []
+    }
+    private struct CatalogResponse: Decodable { let metas: [Meta] }
+
+    /// Meta for a title (our route proxies Cinemeta for tt ids).
+    func meta(type: String, id: String) async throws -> Meta? {
+        let d = try await get("/stremio/meta/\(type)/\(id).json")
+        return (try? JSONDecoder().decode(MetaResponse.self, from: d))?.meta
+    }
+    private struct MetaResponse: Decodable { let meta: Meta? }
+
+    /// Resolve an IMDb id to the best playable stream URL (already loaded into
+    /// the primary engine by HomeStream). This is the one-tap "⚡ Auto" path.
+    func resolve(type: String, id: String, season: Int?, episode: Int?) async throws -> Stream {
+        var comps = URLComponents(url: base.appendingPathComponent("/api/torrent/resolve"), resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "type", value: type)]
+        if let s = season { items.append(URLQueryItem(name: "s", value: String(s))) }
+        if let e = episode { items.append(URLQueryItem(name: "e", value: String(e))) }
+        comps.queryItems = items
+        let (data, res) = try await URLSession.shared.data(from: comps.url!)
+        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.http((res as? HTTPURLResponse)?.statusCode ?? 0) }
+        struct R: Decodable { let ok: Bool; let streamUrl: String?; let title: String?; let error: String? }
+        let r = try JSONDecoder().decode(R.self, from: data)
+        guard r.ok, let u = r.streamUrl else { throw APIError.http(502) }
+        return Stream(title: r.title ?? "Auto", url: u, behaviorHints: nil)
+    }
+
+    /// Full ranked source list for manual pick.
+    func streams(type: String, id: String) async throws -> [Stream] {
+        let d = try await get("/stremio/stream/\(type)/\(id).json")
+        return (try? JSONDecoder().decode(StreamsResponse.self, from: d))?.streams ?? []
+    }
+    private struct StreamsResponse: Decodable { let streams: [Stream] }
+}

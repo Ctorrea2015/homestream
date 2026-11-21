@@ -1,0 +1,26 @@
+name: HomeStreamPlayer
+options:
+  bundleIdPrefix: com.homestream
+  deploymentTarget: "16.0"
+  XcodeCreation:
+    groupSorting: alphabetical
+settings:
+  base:
+    PRODUCT_NAME: HomeStreamPlayer
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+targets:
+  HomeStreamPlayer:
+    type: application
+    sources:
+      - path: HomeStreamPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.homestream.player
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true   # LAN + Tailscale HTTP
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""             # set your team for sideload
+    dependencies: []
