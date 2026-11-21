@@ -70,7 +70,7 @@ struct IPTVView: View {
             categories = d.categories ?? []
             channels = d.channels ?? []
             error = ""
-        } catch { error = "Couldn't load channels: \(error.localizedDescription)" }
+        } catch let e { error = "Couldn't load channels: \(e.localizedDescription)" }
     }
 
     struct Cache: Decodable { let categories: [IPTVCategory]?; let channels: [IPTVChannel]? }
