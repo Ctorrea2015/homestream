@@ -83,6 +83,13 @@ struct PlayerView: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showAirPlayInfo) { airPlaySheet }
+        // Auto-hide the controls/menu 4s after they appear, so full screen
+        // stays clean. Tapping the video brings them back (and restarts this).
+        .task(id: showControls) {
+            guard showControls else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            withAnimation { showControls = false }
+        }
     }
 
     private var airPlaySheet: some View {
