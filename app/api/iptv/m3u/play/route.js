@@ -84,20 +84,10 @@ export async function GET(request) {
   const ch = (data?.channels || [])[index];
   if (!ch?.url) return NextResponse.json({ error: "Channel not found — upload a playlist first" }, { status: 404 });
 
-  // Raw TS / non-HLS stream: wrap it in a tiny generated HLS playlist so
-  // AVPlayer can play it natively. (The ffmpeg segmenter is still being
-  // debugged — this path is known to play, so keep it as the live default.)
+  // Raw TS / non-HLS stream: use the real ffmpeg HLS segmenter (rolling
+  // 4-second segments) so players don't stop after a single fake segment.
   if (!/\.m3u8?(\?|$)/i.test(ch.url)) {
-    const rawURL = `${self}/api/iptv/m3u/play?index=${index}&raw=1`;
-    const playlist = [
-      "#EXTM3U",
-      "#EXT-X-VERSION:3",
-      "#EXT-X-TARGETDURATION:4",
-      "#EXT-X-MEDIA-SEQUENCE:0",
-      `#EXTINF:4.000,`,
-      rawURL,
-    ].join("\n") + "\n";
-    return new Response(playlist, { headers: { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" } });
+    return NextResponse.redirect(`${self}/api/iptv/hls?index=${index}`, { status: 302 });
   }
 
   // Rewrite .m3u8 playlist segment URLs to come back through this endpoint.
