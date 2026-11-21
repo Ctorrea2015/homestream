@@ -15,17 +15,55 @@ export default function DownloadsPage() {
   const [data, setData] = useState({ downloads: [], at: null });
   const [error, setError] = useState("");
   const [paused, setPaused] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await fetch("/api/downloads", { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+      setError("");
+    } catch (e) { setError(String(e.message || e)); }
+  };
+
+  const remove = async (d) => {
+    if (!confirm(`Delete "${d.name}" from ${d.engine} (including files)?`)) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/downloads/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine: d.engine, id: d.id, hash: d.fullHash }),
+      });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok || !out.ok) throw new Error(out.error || `HTTP ${r.status}`);
+      await load();
+    } catch (e) { setError(`Delete failed: ${e.message}`); }
+    finally { setBusy(false); }
+  };
+
+  const clearIdle = async () => {
+    const idle = (data.downloads || []).filter((d) => Number(d.peers) === 0 && !/downloading/i.test(d.status || "") || Number(d.peers) === 0 && /wait|idle|stall/i.test(d.status || ""));
+    if (!idle.length) return alert("No idle torrents (0 peers) to clear.");
+    if (!confirm(`Delete ${idle.length} idle torrent(s) with 0 peers?`)) return;
+    setBusy(true);
+    for (const d of idle) {
+      try {
+        await fetch("/api/downloads/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ engine: d.engine, id: d.id, hash: d.fullHash }),
+        });
+      } catch {}
+    }
+    setBusy(false);
+    await load();
+  };
 
   useEffect(() => {
     let live = true;
-    const load = async () => {
-      try {
-        const r = await fetch("/api/downloads", { cache: "no-store" });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (live) { setData(await r.json()); setError(""); }
-      } catch (e) { if (live) setError(String(e.message || e)); }
-    };
-    load();
+    const first = () => { load().then(() => { if (live) {} }); };
+    first();
     const t = setInterval(() => { if (!paused) load(); }, 5000);
     return () => { live = false; clearInterval(t); };
   }, [paused]);
@@ -40,6 +78,7 @@ export default function DownloadsPage() {
         </div>
         <div className="bar-actions">
           <Link href="/">← Home</Link>
+          <button onClick={clearIdle} disabled={busy}>🧹 Clear idle</button>
           <button onClick={() => setPaused((p) => !p)}>{paused ? "▶ Resume" : "⏸ Pause"}</button>
         </div>
       </header>
@@ -56,7 +95,7 @@ export default function DownloadsPage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Engine</th><th>Title</th><th>Progress</th><th>Speed</th><th>Peers</th><th>Size</th><th>ETA</th><th>Status</th></tr>
+              <tr><th>Engine</th><th>Title</th><th>Progress</th><th>Speed</th><th>Peers</th><th>Size</th><th>ETA</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {rows.map((d, i) => (
@@ -73,6 +112,7 @@ export default function DownloadsPage() {
                   <td>{fmtSize(d.size)}</td>
                   <td>{d.eta || <span className="muted">—</span>}</td>
                   <td><span className={`status ${/dead|fail|stall|wait/i.test(d.status) ? "warn" : ""}`}>{d.status}</span></td>
+                  <td><button className="del" onClick={() => remove(d)} disabled={busy} title="Delete torrent + files">✕</button></td>
                 </tr>
               ))}
             </tbody>

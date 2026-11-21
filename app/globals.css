@@ -487,3 +487,7 @@ td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-spa
 .status { font-size: 12px; text-transform: capitalize; }
 .status.warn { color: #ffb454; }
 .foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 16px; }
+
+.del { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; cursor: pointer; padding: 3px 8px; font-size: 13px; }
+.del:hover { color: #ff6b6b; border-color: #ff6b6b; }
+.bar-actions button:disabled { opacity: 0.5; cursor: default; }

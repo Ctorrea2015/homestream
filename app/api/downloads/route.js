@@ -40,8 +40,10 @@ async function fromRqbitApi(host, label) {
     const progress = size > 0 ? Math.min(100, Math.round((fetched / size) * 100)) : null;
     out.push({
       engine: label,
-      name: t.name || "(resolving metadata…)",
+      id: t.id,
       infoHash: (t.info_hash || "").slice(0, 12),
+      fullHash: String(t.info_hash || "").toLowerCase(),
+      name: t.name || "(resolving metadata…)",
       progress,
       speed,
       peers,
@@ -75,8 +77,10 @@ async function fromQb(cfg) {
     const all = await r.json();
     return (Array.isArray(all) ? all : []).map((t) => ({
       engine: "qB",
+      id: null,
       name: t.name || "?",
       infoHash: String(t.hash || "").slice(0, 12),
+      fullHash: String(t.hash || "").toLowerCase(),
       progress: Math.round((t.progress || 0) * 100),
       speed: `${((t.dlspeed || 0) / 1048576).toFixed(2)} MiB/s`,
       peers: (t.num_leechs || 0) + (t.num_seeds || 0),
