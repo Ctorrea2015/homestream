@@ -8,7 +8,8 @@ struct RootView: View {
             BrowseView(type: "movie").tabItem { Label("Movies", systemImage: "film") }.tag(0)
             BrowseView(type: "series").tabItem { Label("Shows", systemImage: "tv") }.tag(1)
             SearchView().tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(2)
-            SettingsView().tabItem { Label("Settings", systemImage: "gear") }.tag(3)
+            IPTVView().tabItem { Label("Live TV", systemImage: "tv") }.tag(3)
+            SettingsView().tabItem { Label("Settings", systemImage: "gear") }.tag(4)
         }
     }
 }
