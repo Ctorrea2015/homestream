@@ -9,6 +9,8 @@ struct DetailView: View {
     @State private var loading = false
     @State private var error = ""
     @State private var playing: API.Stream?
+    @State private var preloaded: API.Stream?      // warmed when the detail page opens
+    @State private var preloadKey = ""             // which title/episode was warmed
 
     // Explicit init: @EnvironmentObject makes the memberwise initializer
     // private, so callers in BrowseView can't construct DetailView otherwise.
@@ -31,6 +33,9 @@ struct DetailView: View {
                 }.padding(.horizontal)
             }
             if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
+            if preloaded != nil && !loading {
+                Text("Ready to play · started downloading").font(.caption).foregroundStyle(.green)
+            }
             Button {
                 Task { await play() }
             } label: {
@@ -40,19 +45,40 @@ struct DetailView: View {
             Spacer()
         }
         .padding().navigationTitle("Details")
+        // Pre-warm the moment you land on a title (or change episode), so the
+        // Play button starts instantly instead of waiting on Torrentio + load.
+        .task(id: "\(meta.id)-\(season)-\(episode)") { await prewarm() }
         .sheet(item: $playing) { stream in
             PlayerView(stream: stream, title: meta.name,
                        resumeKey: "pos-\(meta.id)-\(isSeries ? "\(season)-\(episode)" : "")")
         }
     }
 
+    func currentId() -> String {
+        isSeries ? "\(meta.id):\(season):\(episode)" : meta.id
+    }
+
+    func prewarm() async {
+        let key = currentId()
+        preloadKey = key
+        preloaded = nil
+        // Resolve early — this is the slow part (addon query + engine load).
+        preloaded = try? await API(base: settings.base).resolve(
+            type: isSeries ? "series" : "movie", id: key,
+            season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+    }
+
     func play() async {
         loading = true; error = ""
-        let id = isSeries ? "\(meta.id):\(season):\(episode)" : meta.id
+        let id = currentId()
         do {
-            playing = try await API(base: settings.base).resolve(
-                type: isSeries ? "series" : "movie", id: id,
-                season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+            if preloadKey == id, let ready = preloaded {
+                playing = ready                       // pre-warmed: instant
+            } else {
+                playing = try await API(base: settings.base).resolve(
+                    type: isSeries ? "series" : "movie", id: id,
+                    season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+            }
         } catch { self.error = "Couldn't load stream: \(error.localizedDescription)" }
         loading = false
     }
