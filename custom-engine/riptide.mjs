@@ -190,6 +190,12 @@ function qbFind(infoHash) {
   return qb("/torrents/info").then((all) => (Array.isArray(all) ? all : []).find((t) => String(t.hash || "").toLowerCase() === infoHash));
 }
 
+/** Ensure logged in and return the current Cookie header object for raw fetches. */
+async function qbCookie() {
+  if (!sid) await qb("/torrents/info").catch(() => {}); // triggers login
+  return sid ? { Cookie: `SID=${sid}` } : {};
+}
+
 const qbb = {
   async list() {
     const all = await qb("/torrents/info");
@@ -197,6 +203,7 @@ const qbb = {
   },
   async add(hash, { body, ctype, trackers }) {
     let addBody;
+    const cookies = await qbCookie();
     if (/x-bittorrent/i.test(ctype)) {
       // qB accepts .torrent uploads as multipart/form-data
       const fd = "----hs" + Date.now();
@@ -205,7 +212,7 @@ const qbb = {
         ...body, `\r\n--${fd}--\r\n`,
       ];
       addBody = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p)));
-      const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { ...cookieHeader, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
+      const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { ...cookies, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
       if (!r.ok && r.status !== 409) throw new Error(`qB add -> HTTP ${r.status}`);
     } else {
       // qB returns 409 "torrent already exists" if it's still in qB from a
@@ -215,7 +222,7 @@ const qbb = {
       if (trackers.length) form.set("tr", trackers.join("\n"));
       const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, {
         method: "POST",
-        headers: { ...cookieHeader, "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { ...cookies, "Content-Type": "application/x-www-form-urlencoded" },
         body: form,
         signal: AbortSignal.timeout(12000),
       });
