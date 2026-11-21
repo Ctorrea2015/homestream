@@ -37,6 +37,25 @@ function proxy(url, reqHeaders = {}) {
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const seg = sp.get("seg");
+  // Raw mode: pipe a single TS/channel stream (used by the generated HLS
+  // playlist above, and by rewritten playlist segments).
+  if (sp.get("raw") === "1") {
+    const ri = Number(sp.get("index"));
+    let d2 = null;
+    try { d2 = JSON.parse(await fs.readFile(path.join(process.cwd(), ".data", "iptv.json"), "utf8")); } catch {}
+    const rch = (d2?.channels || [])[ri];
+    if (!rch?.url) return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+    try {
+      const upstream = await proxy(rch.url);
+      const headers = new Headers();
+      for (const h of ["content-type", "content-length", "accept-ranges"]) {
+        const v = upstream.headers[h]; if (v) headers.set(h, v);
+      }
+      return new Response(upstream, { headers });
+    } catch (e) {
+      return NextResponse.json({ error: String(e?.message || e).slice(0, 80) }, { status: 502 });
+    }
+  }
   if (seg) {
     try {
       const upstream = await proxy(seg);
@@ -59,6 +78,24 @@ export async function GET(request) {
   } catch { data = null; }
   const ch = (data?.channels || [])[index];
   if (!ch?.url) return NextResponse.json({ error: "Channel not found — upload a playlist first" }, { status: 404 });
+
+  // Raw TS / non-HLS stream: wrap it in a tiny generated HLS playlist so
+  // AVPlayer can play it natively. The playlist points back here with ?raw=1.
+  // (These provider channels use .ts URLs; piping raw bytes directly makes
+  // AVPlayer fail because it only understands HLS, not a bare TS byte stream.)
+  if (!/\.m3u8?(\?|$)/i.test(ch.url)) {
+    const self = new URL(request.url).origin;
+    const rawURL = `${self}/api/iptv/m3u/play?index=${index}&raw=1`;
+    const playlist = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:3",
+      "#EXT-X-TARGETDURATION:4",
+      "#EXT-X-MEDIA-SEQUENCE:0",
+      `#EXTINF:4.000,`,
+      rawURL,
+    ].join("\n") + "\n";
+    return new Response(playlist, { headers: { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" } });
+  }
 
   // Rewrite .m3u8 playlist segment URLs to come back through this endpoint.
   try {
