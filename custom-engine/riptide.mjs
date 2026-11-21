@@ -169,10 +169,18 @@ async function qb(ep, init = {}) {
     const form = new URLSearchParams({ username: CFG.qbUser, password: CFG.qbPass });
     const r = await fetch(`${CFG.qbUrl}/api/v2/auth/login`, { method: "POST", body: form, signal: AbortSignal.timeout(8000) });
     const cookie = r.headers.get("set-cookie") || "";
-    sid = /SID=([^;]+)/.exec(cookie)?.[1] || "";
-    if (!sid) throw new Error(`qB login failed: HTTP ${r.status}`);
+    const text = await r.text().catch(() => "");
+    // qB 4.x: 200 "Ok." + SID cookie | qB 5.x: 204 + SID cookie |
+    // 5.x with "bypass auth for localhost" ON: 204 + NO cookie — but API
+    // calls need no cookie at all. Treat all as valid (same as lib/qbittorrent.js).
+    if (r.ok && (cookie.includes("SID=") || r.status === 204 || /Ok/.test(text))) {
+      sid = /SID=[^;]+/.exec(cookie)?.[0]?.replace(/^SID=/, "") || "";
+    } else {
+      throw new Error(`qB login failed: HTTP ${r.status}`);
+    }
   }
-  const r = await fetch(`${CFG.qbUrl}/api/v2${ep}`, { ...init, headers: { Cookie: `SID=${sid}`, ...(init.headers || {}) }, signal: AbortSignal.timeout(12000) });
+  const cookieHeader = sid ? { Cookie: `SID=${sid}` } : {};
+  const r = await fetch(`${CFG.qbUrl}/api/v2${ep}`, { ...init, headers: { ...cookieHeader, ...(init.headers || {}) }, signal: AbortSignal.timeout(12000) });
   if (!r.ok) throw new Error(`qB ${ep} -> HTTP ${r.status}`);
   const ct = r.headers.get("content-type") || "";
   return /json/.test(ct) ? r.json() : r.text();
@@ -197,7 +205,7 @@ const qbb = {
         ...body, `\r\n--${fd}--\r\n`,
       ];
       addBody = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p)));
-      const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { Cookie: `SID=${sid}`, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
+      const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { ...cookieHeader, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`qB add -> HTTP ${r.status}`);
     } else {
       const form = new URLSearchParams({ urls: String(body || "") });
