@@ -17,7 +17,7 @@ class SourcesActivity : Activity() {
         val status = TextView(this).apply { text = "Add your channels"; setTextColor(0xFFFFFFFF.toInt()); textSize = 18f }
 
         val url = EditText(this).apply { hint = "M3U playlist URL" }
-        val paste = EditText(this).apply { hint = "Or paste M3U contents"; singleLine = false }
+        val paste = EditText(this).apply { hint = "Or paste M3U contents"; isSingleLine = false }
         val host = EditText(this).apply { hint = "Xtream host (http://...)" }
         val user = EditText(this).apply { hint = "Xtream username" }
         val pass = EditText(this).apply { hint = "Xtream password" }

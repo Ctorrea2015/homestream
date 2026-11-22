@@ -81,7 +81,7 @@ class MainActivity : Activity() {
     }
 
     private fun promptSearch() {
-        val input = EditText(this).apply { hint = "Movie or show title"; singleLine = true }
+        val input = EditText(this).apply { hint = "Movie or show title"; isSingleLine = true }
         AlertDialog.Builder(this).setTitle("Search").setView(input)
             .setPositiveButton("Go") { _, _ ->
                 val q = input.text.toString().trim()
