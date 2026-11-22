@@ -22,6 +22,8 @@ class PlayerActivity : Activity() {
     private lateinit var controls: TextView
     private val handler = Handler(Looper.getMainLooper())
     private val hide = Runnable { controls.visibility = View.GONE }
+    private var destroyed = false
+    private var checkPlay: Runnable? = null
 
     companion object {
         private var pendingUrl = ""
@@ -46,18 +48,41 @@ class PlayerActivity : Activity() {
         root.addView(controls, FrameLayout.LayoutParams(-1, -1))
         val spinner = ProgressBar(this).apply { isIndeterminate = true }
         root.addView(spinner, FrameLayout.LayoutParams(80, 80, Gravity.CENTER))
+        val hint = TextView(this).apply {
+            text = "Connecting to stream…"; setTextColor(0xFFCCCCCC.toInt()); textSize = 14f
+            gravity = Gravity.CENTER
+        }
+        root.addView(hint, FrameLayout.LayoutParams(-1, -1, Gravity.BOTTOM or Gravity.CENTER))
         setContentView(root)
 
         try {
-            libvlc = LibVLC(this, arrayListOf("--no-video-title-show", "--network-caching=1500"))
+            libvlc = LibVLC(this, arrayListOf(
+                "--no-video-title-show",
+                "--network-caching=3000",
+                "--http-timeout=120",        // patient with cold torrent starts (was ~31s to first byte)
+                "--file-caching=2000",
+                "--drop-late-frames",
+                "--skip-frames"
+            ))
             player = MediaPlayer(libvlc).apply {
                 attachViews(video, null, false, false)
                 val m = Media(libvlc, android.net.Uri.parse(pendingUrl))
                 media = m; m.release()
                 play()
             }
-            spinner.visibility = View.GONE
+            spinner.visibility = View.VISIBLE   // hide once video starts (on first frame)
+            hint.visibility = View.VISIBLE
             showControls()
+            // Hide the loading overlay once media actually starts playing.
+            val check = object : Runnable {
+                override fun run() {
+                    if (destroyed) return
+                    if (player?.isPlaying == true) { spinner.visibility = View.GONE; hint.visibility = View.GONE }
+                    else handler.postDelayed(this, 500)
+                }
+            }
+            checkPlay = check
+            handler.post(check)
         } catch (e: Exception) {
             Toast.makeText(this, "Player error: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
@@ -83,7 +108,9 @@ class PlayerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         handler.removeCallbacks(hide)
+        checkPlay?.let { handler.removeCallbacks(it) }
         player?.let { it.detachViews(); it.release() }
         libvlc?.release()
         super.onDestroy()
