@@ -38,6 +38,7 @@ class MainActivity : Activity() {
         nav.addView(tab("Shows") { loadCatalog("series") })
         nav.addView(tab("Search") { promptSearch() })
         nav.addView(tab("Live TV") { loadChannels() })
+        nav.addView(tab("Find Channel") { promptChannelSearch() })
         nav.addView(tab("Sources") { startActivity(Intent(this, SourcesActivity::class.java)) })
         nav.addView(tab("Settings") { startActivity(Intent(this, SettingsActivity::class.java)) })
 
@@ -101,6 +102,28 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun promptChannelSearch() {
+        if (channels.isEmpty()) {
+            Toast.makeText(this, "Loading channels first…", Toast.LENGTH_SHORT).show()
+            thread { channels = Api.channels() }
+        }
+        val input = EditText(this).apply { hint = "Channel name or category"; isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("Find a channel").setView(input)
+            .setPositiveButton("Search") { _, _ ->
+                val q = input.text.toString().trim().lowercase()
+                if (q.isEmpty()) return@setPositiveButton
+                container.removeAllViews()
+                val found = channels.filter { it.name.lowercase().contains(q) || it.group.lowercase().contains(q) }
+                if (found.isEmpty()) { empty("No channels match \"$q\""); return@setPositiveButton }
+                val row = PosterRow(this, "${found.size} CHANNELS MATCHING \"${q.uppercase()}\"")
+                found.take(300).forEach { ch ->
+                    val m = Meta(ch.index.toString(), ch.name, "live", ch.logo.ifBlank { null })
+                    row.add(m) { PlayerActivity.open(this, Api.channelUrl(ch.index), ch.name) }
+                }
+                container.addView(row)
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun empty(msg: String) {
