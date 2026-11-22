@@ -96,7 +96,7 @@ class MainActivity : Activity() {
                     if (list.isEmpty()) continue
                     val row = PosterRow(this, name.uppercase())
                     list.take(80).forEach { ch ->
-                        val m = Meta(ch.index.toString(), ch.name, "live", ch.logo.ifBlank { null })
+                        val m = Meta(ch.index.toString(), ch.name, "live", ch.logo?.ifBlank { null })
                         row.add(m) { PlayerActivity.open(this, Api.channelUrl(ch.index), ch.name) }
                     }
                     container.addView(row)
@@ -120,7 +120,7 @@ class MainActivity : Activity() {
                 if (found.isEmpty()) { empty("No channels match \"$q\""); return@setPositiveButton }
                 val row = PosterRow(this, "${found.size} CHANNELS MATCHING \"${q.uppercase()}\"")
                 found.take(300).forEach { ch ->
-                    val m = Meta(ch.index.toString(), ch.name, "live", ch.logo.ifBlank { null })
+                    val m = Meta(ch.index.toString(), ch.name, "live", ch.logo?.ifBlank { null })
                     row.add(m) { PlayerActivity.open(this, Api.channelUrl(ch.index), ch.name) }
                 }
                 container.addView(row)
