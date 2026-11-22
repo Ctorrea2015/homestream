@@ -1,6 +1,7 @@
 package com.homestream.tv
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +10,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -29,6 +31,7 @@ class PlayerActivity : Activity() {
     companion object {
         private var pendingUrl = ""
         private var pendingTitle = ""
+        val currentUrl get() = pendingUrl
         fun open(activity: Activity, url: String, title: String) {
             pendingUrl = url; pendingTitle = title
             activity.startActivity(android.content.Intent(activity, PlayerActivity::class.java))
@@ -58,14 +61,8 @@ class PlayerActivity : Activity() {
         setContentView(root)
 
         try {
-            libvlc = LibVLC(this, arrayListOf(
-                "--no-video-title-show",
-                "--network-caching=3000",
-                "--http-timeout=120",        // patient with cold torrent starts (was ~31s to first byte)
-                "--file-caching=2000",
-                "--drop-late-frames",
-                "--skip-frames"
-            ))
+            // Minimal options first — some Fire OS builds reject extra flags.
+            libvlc = LibVLC(this, arrayListOf("--no-video-title-show"))
             player = MediaPlayer(libvlc).apply {
                 attachViews(video, null, false, false)
                 val m = Media(libvlc, android.net.Uri.parse(pendingUrl))
@@ -86,8 +83,21 @@ class PlayerActivity : Activity() {
             checkPlay = check
             handler.post(check)
         } catch (e: Exception) {
-            Toast.makeText(this, "Player error: ${e.message}", Toast.LENGTH_LONG).show()
-            finish()
+        } catch (e: Exception) {
+            val msg = TextView(this).apply {
+                text = "Player couldn't start.\n\n${e.javaClass.simpleName}: ${e.message}\n\nTap below to use the compatible player."
+                setTextColor(0xFFFFFFFF.toInt()); textSize = 17f
+                gravity = Gravity.CENTER; setPadding(40, 40, 40, 20)
+            }
+            root.addView(msg, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
+            val btn = Button(this).apply {
+                text = "Play with compatible player"; isFocusable = true
+                setOnClickListener { startActivity(Intent(this@PlayerActivity, FallbackPlayerActivity::class.java)) }
+            }
+            root.addView(btn, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER or Gravity.BOTTOM))
+        }
+    }
+}
         }
     }
 
