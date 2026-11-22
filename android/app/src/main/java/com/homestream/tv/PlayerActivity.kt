@@ -38,9 +38,10 @@ class PlayerActivity : Activity() {
         val video = VLCVideoLayout(this)
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
         controls = TextView(this).apply {
-            text = "$pendingTitle\nOK = pause/play · ◀ ▶ = seek · Back = exit"
-            setTextColor(0xFFFFFFFF.toInt()); textSize = 16f
-            setPadding(24, 24, 24, 24); gravity = Gravity.BOTTOM or Gravity.CENTER
+            text = "$pendingTitle\n\nOK  play / pause      ◀ ▶  seek 10s      BACK  exit"
+            setTextColor(0xFFFFFFFF.toInt()); textSize = 20f
+            setPadding(32, 24, 32, 32); gravity = Gravity.BOTTOM or Gravity.LEFT
+            setBackgroundColor(0x99000000.toInt())
         }
         root.addView(controls, FrameLayout.LayoutParams(-1, -1))
         val spinner = ProgressBar(this).apply { isIndeterminate = true }
