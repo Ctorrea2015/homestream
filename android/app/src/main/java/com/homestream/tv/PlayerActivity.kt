@@ -83,7 +83,6 @@ class PlayerActivity : Activity() {
             checkPlay = check
             handler.post(check)
         } catch (e: Exception) {
-        } catch (e: Exception) {
             val msg = TextView(this).apply {
                 text = "Player couldn't start.\n\n${e.javaClass.simpleName}: ${e.message}\n\nTap below to use the compatible player."
                 setTextColor(0xFFFFFFFF.toInt()); textSize = 17f
@@ -95,9 +94,6 @@ class PlayerActivity : Activity() {
                 setOnClickListener { startActivity(Intent(this@PlayerActivity, FallbackPlayerActivity::class.java)) }
             }
             root.addView(btn, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER or Gravity.BOTTOM))
-        }
-    }
-}
         }
     }
 
