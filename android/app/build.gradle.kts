@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.homestream.tv"
-        minSdk = 24
+        minSdk = 21      // 1st-gen Fire Stick = Fire OS 5 (Android 5.1, SDK 22)
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
