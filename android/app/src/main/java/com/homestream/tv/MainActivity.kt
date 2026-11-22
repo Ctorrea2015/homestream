@@ -2,6 +2,7 @@ package com.homestream.tv
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -90,7 +91,7 @@ class MainActivity : Activity() {
                 container.removeAllViews()
                 if (channels.isEmpty()) { empty("No channels — add a source in Sources"); return@runOnUiThread }
                 // Group by category, each as a poster row with channel logos.
-                val groups = channels.groupBy { it.group.ifBlank { "Other" } }.toSortedMap()
+                val groups = channels.groupBy { it.group.ifBlank { "Other" } }
                 for ((name, list) in groups) {
                     if (list.isEmpty()) continue
                     val row = PosterRow(this, name.uppercase())
@@ -115,7 +116,7 @@ class MainActivity : Activity() {
                 val q = input.text.toString().trim().lowercase()
                 if (q.isEmpty()) return@setPositiveButton
                 container.removeAllViews()
-                val found = channels.filter { it.name.lowercase().contains(q) || it.group.lowercase().contains(q) }
+                val found = channels.filter { it.name.lowercase().contains(q) || (it.group ?: "").lowercase().contains(q) }
                 if (found.isEmpty()) { empty("No channels match \"$q\""); return@setPositiveButton }
                 val row = PosterRow(this, "${found.size} CHANNELS MATCHING \"${q.uppercase()}\"")
                 found.take(300).forEach { ch ->

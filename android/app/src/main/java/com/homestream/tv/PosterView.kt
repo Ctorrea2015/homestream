@@ -11,7 +11,7 @@ import android.widget.*
 import kotlin.concurrent.thread
 
 /** A poster card: artwork (or a generated gradient) + title + focus glow. */
-class PosterView(ctx: Activity) : ViewGroup(ctx) {
+class PosterView(ctx: android.content.Context) : ViewGroup(ctx) {
     private val img = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
     private val shade = View(ctx)
     private val label = TextView(ctx).apply {
@@ -36,6 +36,7 @@ class PosterView(ctx: Activity) : ViewGroup(ctx) {
 
     fun bind(m: Meta) {
         meta = m; label.text = m.name
+        img.setImageDrawable(gradient(m.name))
         if (!m.poster.isNullOrBlank()) thread {
             try {
                 val bmp = apiBitmap(m.poster!!)
@@ -57,8 +58,8 @@ class PosterView(ctx: Activity) : ViewGroup(ctx) {
             intArrayOf(c, Color.rgb((Color.red(c) / 2), (Color.green(c) / 2), (Color.blue(c) / 2))))
     }
 
-    override fun onMeasure(w: Int, h: Int) = setMeasuredDimensions(W + 16, H + 16)
-    override fun onLayout(l: Int, t: Int, r: Int, b: Int) {
+    override fun onMeasure(w: Int, h: Int) = setMeasuredDimension(W + 16, H + 16)
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         img.layout(8, 8, 8 + W, 8 + H); shade.layout(8, 8, 8 + W, 8 + H); label.layout(8, 8, 8 + W, 8 + H)
     }
 }
