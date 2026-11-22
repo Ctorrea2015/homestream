@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
+import android.view.WindowManager
 import android.view.ViewGroup
 import android.widget.*
 import kotlin.concurrent.thread
@@ -20,6 +21,7 @@ class MainActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         Settings.init(this)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) // browsing won't trigger screensaver either
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF0B0B0F.toInt()) }
 
         val brand = TextView(this).apply {

@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -36,6 +37,7 @@ class PlayerActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) // no screensaver mid-movie
         val root = FrameLayout(this).apply { setBackgroundColor(0xFF000000.toInt()) }
         val video = VLCVideoLayout(this)
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
