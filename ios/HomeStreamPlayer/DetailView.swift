@@ -11,7 +11,6 @@ struct DetailView: View {
     @State private var playing: API.Stream?
     @State private var preloaded: API.Stream?      // warmed when the detail page opens
     @State private var preloadKey = ""             // which title/episode was warmed
-    @State private var prewarmTask: Task<API.Stream?, Never>?  // in-flight prewarm — play() awaits this instead of duplicating
 
     // Explicit init: @EnvironmentObject makes the memberwise initializer
     // private, so callers in BrowseView can't construct DetailView otherwise.
@@ -36,9 +35,6 @@ struct DetailView: View {
             if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
             if preloaded != nil && !loading {
                 Text("Ready to play · started downloading").font(.caption).foregroundStyle(.green)
-            } else if preloadKey == currentId() && prewarmTask != nil && preloaded == nil && !loading {
-                // Prewarm still running — show progress so the wait is visible
-                HStack(spacing: 6) { ProgressView().scaleEffect(0.7); Text("Finding a playable source…").font(.caption).foregroundStyle(.secondary) }
             }
             Button {
                 Task { await play() }
@@ -66,42 +62,23 @@ struct DetailView: View {
         let key = currentId()
         preloadKey = key
         preloaded = nil
-        prewarmTask?.cancel() // title/episode changed — abandon the old resolve
         // Resolve early — this is the slow part (addon query + engine load).
-        // Store the Task so play() can await it instead of firing a duplicate.
-        let task = Task<API.Stream?, Never> {
-            let result = try? await API(base: settings.base).resolve(
-                type: isSeries ? "series" : "movie", id: key,
-                season: isSeries ? season : nil, episode: isSeries ? episode : nil)
-            return result
-        }
-        prewarmTask = task
-        let result = await task.value
-        if preloadKey == key { preloaded = result } // only if still on this title
+        preloaded = try? await API(base: settings.base).resolve(
+            type: isSeries ? "series" : "movie", id: key,
+            season: isSeries ? season : nil, episode: isSeries ? episode : nil)
     }
 
     func play() async {
         loading = true; error = ""
         let id = currentId()
         do {
-            let stream: API.Stream
             if preloadKey == id, let ready = preloaded {
-                stream = ready                       // pre-warmed: instant
-            } else if preloadKey == id, let task = prewarmTask {
-                // Prewarm still running for THIS title — await it, don't duplicate.
-                if let warmed = await task.value {
-                    stream = warmed
-                } else {
-                    stream = try await API(base: settings.base).resolve(
-                        type: isSeries ? "series" : "movie", id: id,
-                        season: isSeries ? season : nil, episode: isSeries ? episode : nil)
-                }
+                playing = ready                       // pre-warmed: instant
             } else {
-                stream = try await API(base: settings.base).resolve(
+                playing = try await API(base: settings.base).resolve(
                     type: isSeries ? "series" : "movie", id: id,
                     season: isSeries ? season : nil, episode: isSeries ? episode : nil)
             }
-            playing = stream
         } catch { self.error = "Couldn't load stream: \(error.localizedDescription)" }
         loading = false
     }
