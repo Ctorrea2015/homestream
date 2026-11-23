@@ -40,6 +40,7 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
             VLCPlayerView(url: stream.streamURL!,
                           startPosition: saved.float(forKey: resumeKey),
+                          seekTo: $seekTo,
                           onProgress: { pos, t in position = pos; time = t },
                           onDuration: { d in duration = d },
                           onFinished: { saved.removeObject(forKey: resumeKey); dismiss() },
@@ -57,8 +58,7 @@ struct PlayerView: View {
                                   selectedAudioTrack = english?.index ?? current
                               }
                           },
-                          selectedAudioTrack: $selectedAudioTrack,
-                          seekTo: $seekTo)
+                          selectedAudioTrack: $selectedAudioTrack)
                 .id(playerID)
                 .scaleEffect(zoom)                       // pinch / double-tap zoom
                 .ignoresSafeArea()
