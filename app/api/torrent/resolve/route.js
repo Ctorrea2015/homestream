@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readAddons, streamUrl, normalizeStreams } from "@/lib/addons";
 import { rankStreams } from "@/lib/rankStreams";
 import { qbEnsureTorrent } from "@/lib/qbittorrent";
-import { rqEnsureTorrent, rqWaitForData, riptideHost } from "@/lib/rqbit";
+import { rqEnsureTorrent, rqWaitForData, rqPeerCount, riptideHost } from "@/lib/rqbit";
 import { tpbFallbackStreams } from "@/lib/tpb";
 import { customEngineStreams } from "@/lib/customEngine";
 import { touchStream } from "@/lib/idleTorrents";
@@ -224,24 +224,30 @@ async function resolve(request, body) {
         signal: AbortSignal.timeout(30000),
       }).then((r) => r.arrayBuffer()).then(() => touchStream(infoHash)).catch(() => {});
 
-      // Byte-flow verification — the source may LOAD fine (metadata from the
-      // mirror) but then STALL in qB/Riptide with 0 seeders (stale tracker
-      // scrape fooled the seeder gate). Without this check we'd hand the player
-      // a dead stream URL and it spins forever (2026-11-23: Hunger Games 2012
-      // picked a dead a2zRG source while 56 healthy sources were available).
-      // Poll for real first bytes; if none arrive, skip to the next candidate.
+      // Peer-first verification — skip dead swarms INSTANTLY. Give peers ~3s
+      // to connect (they don't appear the instant a torrent is added), then:
+      //   • 0 connected peers → dead source, skip to next (no 15s byte-wait)
+      //   • peers present → wait up to 15s for real bytes before deciding
+      //   • unknown (-1) → fall through to byte-wait (don't skip blindly)
       let flowOk = true; // default: don't block when we can't verify
       {
         const rid = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
         if (rid) {
           const host = engine === "Riptide" ? primaryHost : null;
+          await new Promise((r) => setTimeout(r, 3000)); // let peers connect
+          const peers = await rqPeerCount(rid, host);
+          if (peers.live === 0) {
+            console.log(`[resolve] ${infoHash.slice(0, 10)} 0 peers on ${engine} — dead source, skipping instantly`);
+            errors.push(`${infoHash.slice(0, 10)}: 0 peers (${engine}) — skipping`);
+            continue; // next ranked candidate — no byte-wait needed
+          }
           flowOk = await rqWaitForData(rid, infoHash, 15000, host);
           if (!flowOk) {
             console.log(`[resolve] ${infoHash.slice(0, 10)} loaded on ${engine} but no bytes in 15s — dead source, trying next`);
             errors.push(`${infoHash.slice(0, 10)}: no first bytes in 15s (${engine}) — skipping`);
             continue; // next ranked candidate
           } else {
-            console.log(`[resolve] ${infoHash.slice(0, 10)} first bytes confirmed on ${engine}`);
+            console.log(`[resolve] ${infoHash.slice(0, 10)} first bytes confirmed on ${engine} (${peers.live} peers)`);
           }
         }
       }
