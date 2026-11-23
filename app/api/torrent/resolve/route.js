@@ -134,6 +134,7 @@ async function resolve(request, body) {
     const nameHint = (abs.searchParams.get("name") || "") + epTag;
     if (epTag) abs.searchParams.set("name", nameHint);
     const trackers = abs.searchParams.getAll("tr");
+    let deadSwarm = false;
     try {
       // Keep the janitor from eating this registration before the client
       // even connects (fresh torrents have no files on disk yet).
@@ -158,10 +159,19 @@ async function resolve(request, body) {
               break;
             }
           } catch (e) {
-            errors.push(`${infoHash.slice(0, 10)}: ${candidate.name}: ${String(e?.message || e).slice(0, 70)}`);
+            const msg = String(e?.message || e);
+            // Riptide's seeder gate returns 409 for a DEAD SWARM — that source
+            // is unusable. Skip it entirely (try the next ranked candidate)
+            // instead of forcing it into rqbit where it stalls at 0 bytes.
+            if (candidate.name === "Riptide" && /409|dead_swarm|no live seeders/i.test(msg)) {
+              errors.push(`${infoHash.slice(0, 10)}: Riptide rejected dead swarm — trying next source`);
+              deadSwarm = true;
+              break;
+            }
+            errors.push(`${infoHash.slice(0, 10)}: ${candidate.name}: ${msg.slice(0, 70)}`);
           }
         }
-      if (!loaded) {
+      if (!loaded && !deadSwarm) {
         // Fallback loader: qB (disk-based, for sources rqbit can't resolve).
         try {
           const q = await qbEnsureTorrent({ infoHash, nameHint, trackers, waitMs: 15000 });
@@ -173,6 +183,7 @@ async function resolve(request, body) {
           errors.push(`${infoHash.slice(0, 10)}: qb: ${String(e?.message || e).slice(0, 70)}`);
         }
       }
+      if (deadSwarm) continue;                    // try the next ranked source
       if (!loaded) throw new Error("no engine could load this source");
 
       // Best-effort warm read: pulls the head through our own stream route,
