@@ -217,12 +217,34 @@ async function resolve(request, body) {
       if (deadSwarm) continue;                    // try the next ranked source
       if (!loaded) throw new Error("no engine could load this source");
 
-      // Best-effort warm read: pulls the head through our own stream route,
-      // which primes whichever engine will serve playback.
+      // Fire the warm read FIRST — it triggers the engine to start pulling the
+      // head pieces, so the byte-flow check below has something to detect.
       fetch(abs, {
         headers: { Range: "bytes=0-1048575", "User-Agent": "HomeStream/1.0 VLC/3.0" },
         signal: AbortSignal.timeout(30000),
       }).then((r) => r.arrayBuffer()).then(() => touchStream(infoHash)).catch(() => {});
+
+      // Byte-flow verification — the source may LOAD fine (metadata from the
+      // mirror) but then STALL in qB/Riptide with 0 seeders (stale tracker
+      // scrape fooled the seeder gate). Without this check we'd hand the player
+      // a dead stream URL and it spins forever (2026-11-23: Hunger Games 2012
+      // picked a dead a2zRG source while 56 healthy sources were available).
+      // Poll for real first bytes; if none arrive, skip to the next candidate.
+      let flowOk = true; // default: don't block when we can't verify
+      {
+        const rid = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
+        if (rid) {
+          const host = engine === "Riptide" ? primaryHost : null;
+          flowOk = await rqWaitForData(rid, infoHash, 15000, host);
+          if (!flowOk) {
+            console.log(`[resolve] ${infoHash.slice(0, 10)} loaded on ${engine} but no bytes in 15s — dead source, trying next`);
+            errors.push(`${infoHash.slice(0, 10)}: no first bytes in 15s (${engine}) — skipping`);
+            continue; // next ranked candidate
+          } else {
+            console.log(`[resolve] ${infoHash.slice(0, 10)} first bytes confirmed on ${engine}`);
+          }
+        }
+      }
 
       // Optional: block until the first pieces actually arrive (rqbit only).
       if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
