@@ -108,6 +108,37 @@ async function resolve(request, body) {
     );
   }
 
+  // 2.5. Year gate — addon results for a 2012 movie often include a hot 2023
+  // sequel ("Ballad of Songbirds & Snakes") whose fresh swarm outranks the
+  // original's stale badges. Filter out sources advertising a different year.
+  if (p.type === "movie") {
+    let wantedYear = null;
+    try {
+      const j = await (await fetch(`https://cinemeta-live.strem.io/meta/movie/${p.imdbId}.json`, {
+        signal: AbortSignal.timeout(8000),
+      })).json().catch(() => null);
+      const rel = String(j?.meta?.releaseInfo || j?.meta?.year || "");
+      const y = /(\d{4})/.exec(rel);
+      if (y) wantedYear = y[1];
+    } catch {}
+    if (wantedYear) {
+      const before = candidates.length;
+      candidates = candidates.filter((s) => {
+        const title = new URL(s.url, base).searchParams.get("name") || s.title || "";
+        const yrs = [...title.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => m[0]);
+        // Keep if no year is advertised, or one of them matches the IMDb year.
+        return yrs.length === 0 || yrs.includes(wantedYear);
+      });
+      console.log(`[resolve] year gate ${wantedYear}: ${before} -> ${candidates.length} sources`);
+    }
+  }
+  if (!candidates.length) {
+    return NextResponse.json(
+      { ok: false, error: `No sources match ${p.torrentId}${p.type === "movie" ? " (year gate)" : ""}` },
+      { status: 404 }
+    );
+  }
+
   // 3. rank, 4. pre-load into rqbit (the PRIMARY engine) so playback starts
   //    instantly. qB is only the fallback if rqbit can't load the source.
   //    Both engines return the SAME /api/torrent/stream URL (abs) — but
