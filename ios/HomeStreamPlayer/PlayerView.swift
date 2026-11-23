@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 struct PlayerView: View {
     let stream: API.Stream
@@ -13,7 +14,18 @@ struct PlayerView: View {
     @State private var zoom: CGFloat = 1.0
     @State private var lastZoom: CGFloat = 1.0
     @State private var showAirPlayInfo = false
+    @State private var playingOK = false
+    @State private var playerFailed = false
+    @State private var startTime = Date()
+    @State private var tick = Date()
+    @State private var cancellables: Set<AnyCancellable> = []
     @EnvironmentObject var settings: Settings
+
+    private var convertedURL: URL? {
+        guard let s = stream.streamURL?.absoluteString else { return nil }
+        let enc = s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s
+        return URL(string: "\(settings.serverURL)/api/tv/transcode?u=\(enc)&f=hls&vod=1")
+    }
     @Environment(\.dismiss) private var dismiss
 
     private let saved = UserDefaults.standard
@@ -24,7 +36,9 @@ struct PlayerView: View {
             VLCPlayerView(url: stream.streamURL!,
                           startPosition: saved.float(forKey: resumeKey),
                           onProgress: { pos, t in position = pos; time = t },
-                          onFinished: { saved.removeObject(forKey: resumeKey); dismiss() })
+                          onFinished: { saved.removeObject(forKey: resumeKey); dismiss() },
+                          onPlaying: { playingOK = true; playerFailed = false },
+                          onError: { _ in playerFailed = true })
                 .id(playerID)
                 .scaleEffect(zoom)                       // pinch / double-tap zoom
                 .ignoresSafeArea()
@@ -80,9 +94,35 @@ struct PlayerView: View {
                     .padding()
                 }
             }
+            if !playingOK || playerFailed {
+                VStack(spacing: 14) {
+                    ProgressView().scaleEffect(1.5)
+                    Text(playerFailed ? "Player couldn't start" : "Connecting to stream…")
+                        .foregroundStyle(.white)
+                    if playerFailed || tick.timeIntervalSince(startTime) > 12 {
+                        Button {
+                            if let u = convertedURL { UIApplication.shared.open(u) }
+                        } label: {
+                            Label("Open in Safari (plays anywhere)", systemImage: "safari")
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                                .background(Color.accentColor, in: Capsule())
+                        }
+                        .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.7))
+            }
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showAirPlayInfo) { airPlaySheet }
+        .onAppear {
+            startTime = Date()
+            Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+                .sink { tick = $0 }.store(in: &cancellables)
+        }
+        .onChange(of: playingOK) { ok in if ok { startTime = Date() } }
+        .onDisappear { cancellables.forEach { $0.cancel() } }
         // Auto-hide the controls/menu 4s after they appear, so full screen
         // stays clean. Tapping the video brings them back (and restarts this).
         .task(id: showControls) {

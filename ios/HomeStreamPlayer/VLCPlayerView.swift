@@ -3,15 +3,19 @@ import MobileVLCKit
 import UIKit
 
 /// UIViewRepresentable wrapping VLCMediaPlayer — plays mkv/HEVC/10-bit/DDP
-/// natively on iOS, no server-side transcoding. That's the whole point of
-/// the native app: the Pi just supplies bytes, the iPhone decodes.
+/// natively on iOS, no server-side transcoding. Reports state so the UI can
+/// show a timeout + Safari fallback if this device's VLC can't start.
 struct VLCPlayerView: UIViewRepresentable {
     let url: URL
-    let startPosition: Float?          // 0...1 resume
+    let startPosition: Float?
     let onProgress: (Float, TimeInterval) -> Void
     let onFinished: () -> Void
+    let onPlaying: () -> Void
+    let onError: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onProgress: onProgress, onFinished: onFinished) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onProgress: onProgress, onFinished: onFinished, onPlaying: onPlaying, onError: onError)
+    }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -35,9 +39,15 @@ struct VLCPlayerView: UIViewRepresentable {
     final class Coordinator: NSObject, VLCMediaPlayerDelegate {
         let onProgress: (Float, TimeInterval) -> Void
         let onFinished: () -> Void
+        let onPlaying: () -> Void
+        let onError: (String) -> Void
         var player: VLCMediaPlayer?
-        init(onProgress: @escaping (Float, TimeInterval) -> Void, onFinished: @escaping () -> Void) {
+        init(onProgress: @escaping (Float, TimeInterval) -> Void,
+             onFinished: @escaping () -> Void,
+             onPlaying: @escaping () -> Void,
+             onError: @escaping (String) -> Void) {
             self.onProgress = onProgress; self.onFinished = onFinished
+            self.onPlaying = onPlaying; self.onError = onError
         }
         func mediaPlayerTimeChanged(_ aNotification: Notification) {
             guard let p = player else { return }
@@ -45,7 +55,12 @@ struct VLCPlayerView: UIViewRepresentable {
         }
         func mediaPlayerStateChanged(_ aNotification: Notification) {
             guard let p = player else { return }
-            if p.state == .ended { onFinished() }
+            switch p.state {
+            case .playing: onPlaying()
+            case .ended: onFinished()
+            case .error: onError("VLC couldn't open this stream")
+            default: break
+            }
         }
     }
 }
