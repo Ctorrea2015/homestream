@@ -22,6 +22,8 @@ struct PlayerView: View {
     @State private var showAudioPicker = false
     @State private var audioTracks: [(index: Int, name: String)] = []
     @State private var selectedAudioTrack: Int = -1
+    @State private var seekTo: Float = -1        // -1 = no pending seek; >=0 = seek to fraction
+    @State private var duration: TimeInterval = 0
     @EnvironmentObject var settings: Settings
 
     private var convertedURL: URL? {
@@ -39,6 +41,7 @@ struct PlayerView: View {
             VLCPlayerView(url: stream.streamURL!,
                           startPosition: saved.float(forKey: resumeKey),
                           onProgress: { pos, t in position = pos; time = t },
+                          onDuration: { d in duration = d },
                           onFinished: { saved.removeObject(forKey: resumeKey); dismiss() },
                           onPlaying: { playingOK = true; playerFailed = false },
                           onError: { _ in playerFailed = true },
@@ -54,7 +57,8 @@ struct PlayerView: View {
                                   selectedAudioTrack = english?.index ?? current
                               }
                           },
-                          selectedAudioTrack: $selectedAudioTrack)
+                          selectedAudioTrack: $selectedAudioTrack,
+                          seekTo: $seekTo)
                 .id(playerID)
                 .scaleEffect(zoom)                       // pinch / double-tap zoom
                 .ignoresSafeArea()
@@ -102,8 +106,15 @@ struct PlayerView: View {
                     VStack(spacing: 6) {
                         Text(fmt(time)).font(.caption).monospacedDigit()
                         Slider(value: $position, in: 0...1)
-                            .onChange(of: position) { v in saved.set(v, forKey: resumeKey) }
-                        HStack {
+                            .onChange(of: position) { v in
+                                saved.set(v, forKey: resumeKey)   // save resume position
+                                seekTo = v                         // seek the player
+                            }
+                        HStack(spacing: 24) {
+                            // Skip back 15s / forward 30s by fraction of duration
+                            Button { seekBy(-15) } label: { Image(systemName: "gobackward.15").font(.title2) }
+                            Button { seekBy(30) } label: { Image(systemName: "goforward.30").font(.title2) }
+                            Spacer()
                             Button { zoom = max(1.0, zoom - 0.2) } label: { Image(systemName: "minus.magnifyingglass") }
                             Button { zoom = 1.0; lastZoom = 1.0 } label: { Text("Fit") }
                             Button { zoom = min(3.0, zoom + 0.2) } label: { Image(systemName: "plus.magnifyingglass") }
@@ -206,6 +217,15 @@ struct PlayerView: View {
         let enc = u.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? u
         let hls = "\(settings.serverURL)/api/tv/transcode?u=\(enc)&f=hls&vod=1"
         if let url = URL(string: hls) { UIApplication.shared.open(url) }
+    }
+
+    private func seekBy(_ seconds: Double) {
+        guard duration > 0 else { return }
+        let delta = Float(seconds / duration)
+        let next = min(1, max(0, position + delta))
+        position = next
+        saved.set(next, forKey: resumeKey)
+        seekTo = next
     }
 
     private func fmt(_ t: TimeInterval) -> String {

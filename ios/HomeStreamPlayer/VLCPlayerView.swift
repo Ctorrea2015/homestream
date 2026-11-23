@@ -8,7 +8,10 @@ import UIKit
 struct VLCPlayerView: UIViewRepresentable {
     let url: URL
     let startPosition: Float?
+    // Seek commands from the parent: set to a 0...1 position to seek, -1 = idle.
+    @Binding var seekTo: Float
     let onProgress: (Float, TimeInterval) -> Void
+    let onDuration: (TimeInterval) -> Void
     let onFinished: () -> Void
     let onPlaying: () -> Void
     let onError: (String) -> Void
@@ -18,8 +21,9 @@ struct VLCPlayerView: UIViewRepresentable {
     @Binding var selectedAudioTrack: Int
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onProgress: onProgress, onFinished: onFinished, onPlaying: onPlaying,
-                    onError: onError, onAudioTracks: onAudioTracks, selectedAudioTrack: $selectedAudioTrack)
+        Coordinator(onProgress: onProgress, onDuration: onDuration, onFinished: onFinished, onPlaying: onPlaying,
+                    onError: onError, onAudioTracks: onAudioTracks, selectedAudioTrack: $selectedAudioTrack,
+                    seekTo: $seekTo, startPosition: startPosition)
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -30,7 +34,6 @@ struct VLCPlayerView: UIViewRepresentable {
         player.drawable = view
         context.coordinator.player = player
         player.media = VLCMedia(url: url)
-        if let p = startPosition, p > 0 { player.position = p }
         player.play()
         return view
     }
@@ -38,6 +41,8 @@ struct VLCPlayerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         // When the user picks a track, apply it to the live player.
         context.coordinator.applyAudioTrack(selectedAudioTrack)
+        // When the parent requests a seek, apply it and clear the command.
+        context.coordinator.applySeekIfNeeded()
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -52,16 +57,24 @@ struct VLCPlayerView: UIViewRepresentable {
         var player: VLCMediaPlayer?
         var onAudioTracks: (([(index: Int, name: String)], Int) -> Void)?
         var selectedAudioTrack: Binding<Int>
+        var seekTo: Binding<Float>
+        let startPosition: Float?
         var tracksReported = false
+        var initialSeekDone = false
+        let onDuration: (TimeInterval) -> Void
         init(onProgress: @escaping (Float, TimeInterval) -> Void,
+             onDuration: @escaping (TimeInterval) -> Void,
              onFinished: @escaping () -> Void,
              onPlaying: @escaping () -> Void,
              onError: @escaping (String) -> Void,
              onAudioTracks: (([(index: Int, name: String)], Int) -> Void)?,
-             selectedAudioTrack: Binding<Int>) {
-            self.onProgress = onProgress; self.onFinished = onFinished
+             selectedAudioTrack: Binding<Int>,
+             seekTo: Binding<Float>,
+             startPosition: Float?) {
+            self.onProgress = onProgress; self.onDuration = onDuration; self.onFinished = onFinished
             self.onPlaying = onPlaying; self.onError = onError
             self.onAudioTracks = onAudioTracks; self.selectedAudioTrack = selectedAudioTrack
+            self.seekTo = seekTo; self.startPosition = startPosition
         }
 
         /// Publish the available audio tracks once VLC has parsed the media.
@@ -91,6 +104,14 @@ struct VLCPlayerView: UIViewRepresentable {
             DispatchQueue.main.async { cb?(tracks, current) }
         }
 
+        /// Apply a pending seek from the parent, then clear it (-1).
+        func applySeekIfNeeded() {
+            guard let p = player, seekTo.wrappedValue >= 0 else { return }
+            let target = seekTo.wrappedValue
+            p.position = target
+            seekTo.wrappedValue = -1
+        }
+
         /// Apply a chosen track index (called from updateUIView when binding changes).
         func applyAudioTrack(_ index: Int) {
             guard let p = player, index >= 0 else { return }
@@ -102,12 +123,20 @@ struct VLCPlayerView: UIViewRepresentable {
         func mediaPlayerTimeChanged(_ aNotification: Notification) {
             guard let p = player else { return }
             reportAudioTracksIfNeeded() // tracks become available after playback starts
+            let dur = TimeInterval(p.length.intValue) / 1000.0
+            if dur > 0 { onDuration(dur) }
             onProgress(p.position, TimeInterval(p.time.intValue))
         }
         func mediaPlayerStateChanged(_ aNotification: Notification) {
             guard let p = player else { return }
             switch p.state {
-            case .playing: onPlaying()
+            case .playing:
+                onPlaying()
+                // VLC ignores position set before playback — apply resume now.
+                if !initialSeekDone {
+                    initialSeekDone = true
+                    if let start = startPosition, start > 0 { p.position = start }
+                }
             case .ended: onFinished()
             case .error: onError("VLC couldn't open this stream")
             default: break
