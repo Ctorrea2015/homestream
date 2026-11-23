@@ -197,6 +197,15 @@ async function qbCookie() {
 }
 
 const qbb = {
+  // Resolve a key that may be a numeric id OR an infoHash. Numeric ids shift
+  // when any torrent is deleted (2026-11-23 Hunger Games "no such torrent"
+  // bug), but the infoHash is stable — so hash-based keys always find the
+  // CURRENT torrent object.
+  async byKey(key) {
+    const all = await qbb.list();
+    if (/^[a-f0-9]{40}$/i.test(String(key))) return all.find((x) => x.info_hash === String(key).toLowerCase()) || null;
+    return all[Number(key)] || null;
+  },
   async list() {
     const all = await qb("/torrents/info");
     return (Array.isArray(all) ? all : []).map((t, id) => ({ id, info_hash: String(t.hash || "").toLowerCase(), name: t.name, total_pieces: 0, _hash: t.hash }));
@@ -237,13 +246,13 @@ const qbb = {
     throw new Error("qB did not register the torrent in time");
   },
   async detail(id) {
-    const t = (await qbb.list())[id];
+    const t = await qbb.byKey(id);
     if (!t) throw new Error("no such torrent");
     const files = await qb(`/torrents/files?hash=${encodeURIComponent(t._hash)}`);
     return { output_folder: t.save_path || "", files: (files || []).map((f) => ({ name: f.name, length: f.size, index: f.index })) };
   },
   async stats(id) {
-    const t = (await qbb.list())[id];
+    const t = await qbb.byKey(id);
     if (!t) throw new Error("no such torrent");
     const raw = await qbFind(t.info_hash);
     return {
@@ -254,7 +263,8 @@ const qbb = {
     };
   },
   async onlyFiles(id, indexes) {
-    const t = (await qbb.list())[id];
+    const t = await qbb.byKey(id);
+    if (!t) return {};
     const files = await qb(`/torrents/files?hash=${encodeURIComponent(t._hash)}`);
     const ids = (files || []).map((f) => f.index);
     const off = ids.filter((x) => !indexes.includes(x));
@@ -264,21 +274,21 @@ const qbb = {
     return {};
   },
   async delete(idOrHash) {
-    const all = await qbb.list();
-    const t = /^[a-f0-9]{40}$/i.test(idOrHash) ? all.find((x) => x.info_hash === idOrHash.toLowerCase()) : all[Number(idOrHash)];
+    const t = await qbb.byKey(idOrHash);
     if (!t) return {};
     await qb("/torrents/delete", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ hashes: t._hash, deleteFiles: "true" }) });
     sid = null;
     return {};
   },
   async pause(id) {
-    const t = (await qbb.list())[Number(id)];
+    const t = await qbb.byKey(id);
     if (t) await qb("/torrents/pause", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ hashes: t._hash }) });
     return {};
   },
   async streamPath(id, idx) {
-    const t = (await qbb.list())[Number(id)];
-    const files = await this.detail(Number(id));
+    const t = await qbb.byKey(id);
+    if (!t) throw new Error("no such torrent");
+    const files = await this.detail(t.id);
     const f = files.files[idx];
     if (!f) throw new Error("no such file index");
     return path.join(files.output_folder || "", f.name);

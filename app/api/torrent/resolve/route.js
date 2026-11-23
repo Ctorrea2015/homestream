@@ -231,7 +231,7 @@ async function resolve(request, body) {
       //   • unknown (-1) → fall through to byte-wait (don't skip blindly)
       let flowOk = true; // default: don't block when we can't verify
       {
-        const rid = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
+        const rid = infoHash; // stream URL now uses the hash; use it directly for stats polling
         if (rid) {
           const host = engine === "Riptide" ? primaryHost : null;
           await new Promise((r) => setTimeout(r, 3000)); // let peers connect
@@ -255,8 +255,8 @@ async function resolve(request, body) {
       // Optional: block until the first pieces actually arrive (rqbit only).
       if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
           String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1") {
-        const id = rqbitStreamUrl && /\/torrents\/(\d+)\//.exec(rqbitStreamUrl)?.[1];
-        ready = id ? await rqWaitForData(id, infoHash, 20000, primaryHost) : null;
+        const id = infoHash;
+        ready = await rqWaitForData(id, infoHash, 20000, primaryHost);
       }
 
       return NextResponse.json({
