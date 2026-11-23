@@ -19,6 +19,9 @@ struct PlayerView: View {
     @State private var startTime = Date()
     @State private var tick = Date()
     @State private var cancellables: Set<AnyCancellable> = []
+    @State private var showAudioPicker = false
+    @State private var audioTracks: [(index: Int, name: String)] = []
+    @State private var selectedAudioTrack: Int = -1
     @EnvironmentObject var settings: Settings
 
     private var convertedURL: URL? {
@@ -38,7 +41,20 @@ struct PlayerView: View {
                           onProgress: { pos, t in position = pos; time = t },
                           onFinished: { saved.removeObject(forKey: resumeKey); dismiss() },
                           onPlaying: { playingOK = true; playerFailed = false },
-                          onError: { _ in playerFailed = true })
+                          onError: { _ in playerFailed = true },
+                          onAudioTracks: { tracks, current in
+                              audioTracks = tracks
+                              if selectedAudioTrack < 0 {
+                                  // Prefer an English track by default (files often
+                                  // default to ITA/other language first).
+                                  let english = tracks.first { t in
+                                      t.name.localizedCaseInsensitiveContains("english") ||
+                                      t.name.localizedCaseInsensitiveContains("eng")
+                                  }
+                                  selectedAudioTrack = english?.index ?? current
+                              }
+                          },
+                          selectedAudioTrack: $selectedAudioTrack)
                 .id(playerID)
                 .scaleEffect(zoom)                       // pinch / double-tap zoom
                 .ignoresSafeArea()
@@ -61,6 +77,12 @@ struct PlayerView: View {
                         Spacer()
                         Text(title).font(.headline).lineLimit(1)
                         Spacer()
+                        // Audio language picker (only when the file has multiple tracks)
+                        if audioTracks.count > 1 {
+                            Button { showAudioPicker = true } label: {
+                                Image(systemName: "speaker.wave.2").font(.title3)
+                            }
+                        }
                         // AirPlay — VLCKit can't route to AirPlay, so hand off
                         // to Safari's native HLS player (which has real AirPlay).
                         Button { showAirPlayInfo = true } label: {
@@ -115,6 +137,7 @@ struct PlayerView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showAudioPicker) { audioPickerSheet }
         .sheet(isPresented: $showAirPlayInfo) { airPlaySheet }
         .onAppear {
             startTime = Date()
@@ -129,6 +152,28 @@ struct PlayerView: View {
             guard showControls else { return }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             withAnimation { showControls = false }
+        }
+    }
+
+    private var audioPickerSheet: some View {
+        NavigationStack {
+            List(audioTracks, id: \.index) { track in
+                Button {
+                    selectedAudioTrack = track.index
+                    showAudioPicker = false
+                } label: {
+                    HStack {
+                        Text(track.name)
+                        Spacer()
+                        if track.index == selectedAudioTrack {
+                            Image(systemName: "checkmark").foregroundStyle(.blue)
+                        }
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            .navigationTitle("Audio Language")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showAudioPicker = false } } }
         }
     }
 
