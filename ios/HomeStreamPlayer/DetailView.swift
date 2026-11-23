@@ -11,6 +11,7 @@ struct DetailView: View {
     @State private var playing: API.Stream?
     @State private var preloaded: API.Stream?      // warmed when the detail page opens
     @State private var preloadKey = ""             // which title/episode was warmed
+    @State private var prewarmTask: Task<API.Stream?, Never>?  // in-flight prewarm — play() awaits this instead of duplicating
 
     // Explicit init: @EnvironmentObject makes the memberwise initializer
     // private, so callers in BrowseView can't construct DetailView otherwise.
@@ -62,23 +63,42 @@ struct DetailView: View {
         let key = currentId()
         preloadKey = key
         preloaded = nil
+        prewarmTask?.cancel() // title/episode changed — abandon the old resolve
         // Resolve early — this is the slow part (addon query + engine load).
-        preloaded = try? await API(base: settings.base).resolve(
-            type: isSeries ? "series" : "movie", id: key,
-            season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+        // Store the Task so play() can await it instead of firing a duplicate.
+        let task = Task<API.Stream?, Never> {
+            let result = try? await API(base: settings.base).resolve(
+                type: isSeries ? "series" : "movie", id: key,
+                season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+            return result
+        }
+        prewarmTask = task
+        let result = await task.value
+        if preloadKey == key { preloaded = result } // only if still on this title
     }
 
     func play() async {
         loading = true; error = ""
         let id = currentId()
         do {
+            let stream: API.Stream
             if preloadKey == id, let ready = preloaded {
-                playing = ready                       // pre-warmed: instant
+                stream = ready                       // pre-warmed: instant
+            } else if preloadKey == id, let task = prewarmTask {
+                // Prewarm still running for THIS title — await it, don't duplicate.
+                if let warmed = await task.value {
+                    stream = warmed
+                } else {
+                    stream = try await API(base: settings.base).resolve(
+                        type: isSeries ? "series" : "movie", id: id,
+                        season: isSeries ? season : nil, episode: isSeries ? episode : nil)
+                }
             } else {
-                playing = try await API(base: settings.base).resolve(
+                stream = try await API(base: settings.base).resolve(
                     type: isSeries ? "series" : "movie", id: id,
                     season: isSeries ? season : nil, episode: isSeries ? episode : nil)
             }
+            playing = stream
         } catch { self.error = "Couldn't load stream: \(error.localizedDescription)" }
         loading = false
     }

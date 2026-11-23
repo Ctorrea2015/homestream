@@ -234,17 +234,17 @@ async function resolve(request, body) {
         const rid = infoHash; // stream URL now uses the hash; use it directly for stats polling
         if (rid) {
           const host = engine === "Riptide" ? primaryHost : null;
-          await new Promise((r) => setTimeout(r, 3000)); // let peers connect
+          await new Promise((r) => setTimeout(r, 1500)); // brief grace for peers to connect
           const peers = await rqPeerCount(rid, host);
           if (peers.live === 0) {
             console.log(`[resolve] ${infoHash.slice(0, 10)} 0 peers on ${engine} — dead source, skipping instantly`);
             errors.push(`${infoHash.slice(0, 10)}: 0 peers (${engine}) — skipping`);
             continue; // next ranked candidate — no byte-wait needed
           }
-          flowOk = await rqWaitForData(rid, infoHash, 15000, host);
+          flowOk = await rqWaitForData(rid, infoHash, 8000, host);
           if (!flowOk) {
-            console.log(`[resolve] ${infoHash.slice(0, 10)} loaded on ${engine} but no bytes in 15s — dead source, trying next`);
-            errors.push(`${infoHash.slice(0, 10)}: no first bytes in 15s (${engine}) — skipping`);
+            console.log(`[resolve] ${infoHash.slice(0, 10)} loaded on ${engine} but no bytes in 8s — dead source, trying next`);
+            errors.push(`${infoHash.slice(0, 10)}: no first bytes in 8s (${engine}) — skipping`);
             continue; // next ranked candidate
           } else {
             console.log(`[resolve] ${infoHash.slice(0, 10)} first bytes confirmed on ${engine} (${peers.live} peers)`);
