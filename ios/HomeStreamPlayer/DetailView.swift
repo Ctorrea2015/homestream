@@ -36,6 +36,9 @@ struct DetailView: View {
             if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
             if preloaded != nil && !loading {
                 Text("Ready to play · started downloading").font(.caption).foregroundStyle(.green)
+            } else if preloadKey == currentId() && prewarmTask != nil && preloaded == nil && !loading {
+                // Prewarm still running — show progress so the wait is visible
+                HStack(spacing: 6) { ProgressView().scaleEffect(0.7); Text("Finding a playable source…").font(.caption).foregroundStyle(.secondary) }
             }
             Button {
                 Task { await play() }
