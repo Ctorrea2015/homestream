@@ -5,7 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.homestream.player</string>
     <key>CFBundleName</key>
-    <string>HomeStreamPlayer</string>
+    <string>HomeStream</string>
+    <key>CFBundleDisplayName</key>
+    <string>HomeStream</string>
     <key>CFBundleExecutable</key>
     <string>HomeStreamPlayer</string>
     <key>CFBundlePackageType</key>
