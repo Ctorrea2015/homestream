@@ -239,8 +239,13 @@ struct EpisodeList: View {
                         } label: {
                             HStack(alignment: .top, spacing: 12) {
                                 if let u = ep.thumbURL {
-                                    AsyncImage(url: u) { $0.resizable().frame(width: 70, height: 40).cornerRadius(4) }
-                                        .frame(width: 70, height: 40)
+                                    AsyncImage(url: u) { phase in
+                                        if let img = phase.image {
+                                            img.resizable().scaledToFill().frame(width: 70, height: 40).clipped().cornerRadius(4)
+                                        } else {
+                                            Color.gray.opacity(0.3).frame(width: 70, height: 40).cornerRadius(4)
+                                        }
+                                    }
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("S\(ep.season ?? 0)E\(ep.episode ?? 0)  \(ep.title)")
