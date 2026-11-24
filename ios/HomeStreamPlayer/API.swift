@@ -58,6 +58,10 @@ struct API {
         var thumbURL: URL? { thumbnail.flatMap { URL(string: $0) } }
     }
 
+    /// Cinemeta meta response for the episode list.
+    private struct CinemetaMetaResponse: Decodable { let meta: CinemetaMeta? }
+    private struct CinemetaMeta: Decodable { let videos: [API.Episode]? }
+
     /// Episode list for a series from Cinemeta (videos[] with name/season/episode).
     func episodes(id: String) async throws -> [Episode] {
         let u = URL(string: "https://v3-cinemeta.strem.io/meta/series/\(id).json")!

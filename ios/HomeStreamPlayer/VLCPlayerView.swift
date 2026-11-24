@@ -46,7 +46,7 @@ struct VLCPlayerView: UIViewRepresentable {
         // When the parent requests a seek, apply it and clear the command.
         context.coordinator.applySeekIfNeeded()
         // Play/pause + volume from the parent's controls.
-        context.coordinator.applyPlaybackState(isPaused: isPaused, volume: volume)
+        context.coordinator.applyPlaybackState(isPaused: isPaused)
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -113,15 +113,14 @@ struct VLCPlayerView: UIViewRepresentable {
             DispatchQueue.main.async { cb?(tracks, current) }
         }
 
-        /// Apply play/pause and volume from the parent's controls.
-        func applyPlaybackState(isPaused: Bool, volume: Float) {
+        /// Apply play/pause from the parent's controls.
+        func applyPlaybackState(isPaused: Bool) {
             guard let p = player else { return }
             if isPaused {
                 if p.state == .playing { p.pause() }
             } else {
                 if p.state == .paused { p.play() }
             }
-            if p.volume != volume { p.volume = volume }
         }
 
         /// Apply a pending seek from the parent, then clear it (-1).
