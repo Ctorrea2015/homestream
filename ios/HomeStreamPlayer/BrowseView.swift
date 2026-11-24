@@ -5,12 +5,13 @@ struct RootView: View {
     @State private var tab = 0
     var body: some View {
         TabView(selection: $tab) {
-            BrowseView(type: "movie").tabItem { Label("Movies", systemImage: "film") }.tag(0)
-            BrowseView(type: "series").tabItem { Label("Shows", systemImage: "tv") }.tag(1)
+            BrowseView(type: "movie").tabItem { Label("Home", systemImage: "house.fill") }.tag(0)
+            BrowseView(type: "series").tabItem { Label("Shows", systemImage: "tv.fill") }.tag(1)
             SearchView().tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(2)
-            IPTVView().tabItem { Label("Live TV", systemImage: "tv") }.tag(3)
-            SettingsView().tabItem { Label("Settings", systemImage: "gear") }.tag(4)
+            IPTVView().tabItem { Label("Live TV", systemImage: "square.stack.fill") }.tag(3)
+            SettingsView().tabItem { Label("Profile", systemImage: "person.crop.circle") }.tag(4)
         }
+        .tint(.orange)
     }
 }
 
@@ -19,15 +20,87 @@ struct BrowseView: View {
     @EnvironmentObject var settings: Settings
     @State private var items: [API.Meta] = []
     @State private var error = ""
+    @State private var chip = "All"
+
+    private let chips = ["All", "Popular", "Trending", type == "movie" ? "Movies" : "Shows"]
+
     var body: some View {
         NavigationStack {
             Group {
-                if !error.isEmpty { Text(error).foregroundStyle(.secondary) }
-                else if items.isEmpty { ProgressView("Loading…") }
-                else { List(items) { m in NavigationLink(value: m) { MetaRow(meta: m) } } }
+                if !error.isEmpty {
+                    Text(error).foregroundStyle(.secondary)
+                } else if items.isEmpty {
+                    ProgressView("Loading…")
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            // Header
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Stream Top-Quality").font(.largeTitle).bold()
+                                Text(type == "movie" ? "Movies" : "Shows").font(.largeTitle).bold()
+                                Text("Discover premium titles").font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 20)
+
+                            // Hero card
+                            if let hero = items.first {
+                                NavigationLink(value: hero) {
+                                    ZStack(alignment: .bottomLeading) {
+                                        AsyncImage(url: hero.backdropURL) { img in
+                                            img.resizable().scaledToFill().frame(height: 260).clipped()
+                                        } placeholder: {
+                                            Color.gray.opacity(0.3).frame(height: 260)
+                                        }
+                                        LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
+                                            .frame(height: 260)
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(hero.name).font(.title2).bold().foregroundStyle(.white)
+                                            Text(hero.metaLine).font(.caption).foregroundStyle(.white.opacity(0.8))
+                                            HStack {
+                                                Label("PLAY", systemImage: "play.fill").font(.caption.bold())
+                                                    .padding(.horizontal, 14).padding(.vertical, 8)
+                                                    .background(Color.orange, in: Capsule()).foregroundStyle(.white)
+                                                Spacer()
+                                            }
+                                        }
+                                        .padding(16)
+                                    }
+                                    .cornerRadius(16)
+                                    .padding(.horizontal, 20)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            // Category chips
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(chips, id: \.self) { c in
+                                        Button { chip = c } label: {
+                                            Text(c).font(.subheadline.weight(.semibold))
+                                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                                .background(chip == c ? Color.white : Color.white.opacity(0.12), in: Capsule())
+                                                .foregroundStyle(chip == c ? Color.black : Color.white)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.horizontal, 20)
+                            }
+
+                            // Poster rows
+                            PosterRow(title: "Trending Now", items: items, settings: settings)
+                            if items.count > 6 {
+                                PosterRow(title: "More \(type == "movie" ? "Movies" : "Shows")", items: Array(items.dropFirst(6)), settings: settings)
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                }
             }
-            .navigationTitle(type == "movie" ? "Movies" : "Shows")
-            .navigationDestination(for: API.Meta.self) { m in DetailView(meta: m, type: type) }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarHidden(true)
+            .navigationDestination(for: API.Meta.self) { m in DetailView(meta: m, type: m.type ?? type) }
             .task { await load() }
             .refreshable { await load() }
         }
@@ -35,6 +108,35 @@ struct BrowseView: View {
     func load() async {
         do { items = try await API(base: settings.base).catalog(type: type); error = "" }
         catch { self.error = "Couldn't reach HomeStream: \(error.localizedDescription)" }
+    }
+}
+
+struct PosterRow: View {
+    let title: String
+    let items: [API.Meta]
+    let settings: Settings
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline).foregroundStyle(.white).padding(.horizontal, 20)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(items) { m in
+                        NavigationLink(value: m) {
+                            VStack(spacing: 6) {
+                                AsyncImage(url: m.posterURL) { img in
+                                    img.resizable().frame(width: 110, height: 165).cornerRadius(8)
+                                } placeholder: {
+                                    Color.gray.opacity(0.3).frame(width: 110, height: 165).cornerRadius(8)
+                                }
+                                Text(m.name).font(.caption).lineLimit(1).frame(width: 110).foregroundStyle(.white)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
     }
 }
 
