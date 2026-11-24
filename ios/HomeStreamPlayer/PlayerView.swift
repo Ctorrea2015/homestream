@@ -89,8 +89,11 @@ struct PlayerView: View {
                         }
                         Spacer()
                         Button {
-                            if audioTracks.count > 1 { showAudioPicker = true }
-                            else withAnimation { volume = volume > 0 ? 0 : 1 }
+                            if audioTracks.count > 1 {
+                                showAudioPicker = true
+                            } else {
+                                withAnimation { volume = volume > 0 ? 0 : 1 }
+                            }
                         } label: {
                             Image(systemName: volume > 0 ? "speaker.wave.3.fill" : "speaker.slash.fill").font(.subheadline)
                         }
