@@ -36,6 +36,33 @@ struct API {
 
     enum APIError: Error { case http(Int) }
 
+    struct Episode: Identifiable, Decodable, Hashable {
+        let id: String
+        let name: String?
+        let season: Int?
+        let episode: Int?
+        let overview: String?
+        let thumbnail: String?
+        var title: String { name ?? "Episode \(episode ?? 0)" }
+        var thumbURL: URL? { thumbnail.flatMap { URL(string: $0) } }
+    }
+
+    /// Episode list for a series from Cinemeta (videos[] with name/season/episode).
+    func episodes(id: String) async throws -> [Episode] {
+        let u = URL(string: "https://v3-cinemeta.strem.io/meta/series/\(id).json")!
+        let (data, res) = try await URLSession.shared.data(from: u)
+        guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.http((res as? HTTPURLResponse)?.statusCode ?? 0) }
+        struct R: Decodable { let meta: M?; struct M: Decodable { let videos: [Episode]? } }
+        let videos = (try? JSONDecoder().decode(R.self, from: data))?.meta?.videos ?? []
+        // Drop specials (season 0) and sort by season/episode.
+        return videos.filter { ($0.season ?? 0) > 0 }
+            .sorted { (a, b) in
+                let sa = a.season ?? 0, sb = b.season ?? 0
+                if sa != sb { return sa < sb }
+                return (a.episode ?? 0) < (b.episode ?? 0)
+            }
+    }
+
     /// Catalog rows — Cinemeta's Popular rows (the Pi's own library catalog is
     /// empty when you stream everything, so use real titles for discovery).
     func catalog(type: String) async throws -> [Meta] {

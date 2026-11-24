@@ -11,6 +11,8 @@ struct DetailView: View {
     @State private var playing: API.Stream?
     @State private var preloaded: API.Stream?      // warmed when the detail page opens
     @State private var preloadKey = ""             // which title/episode was warmed
+    @State private var episodes: [API.Episode] = []
+    @State private var showEpisodes = false
 
     // Explicit init: @EnvironmentObject makes the memberwise initializer
     // private, so callers in BrowseView can't construct DetailView otherwise.
@@ -27,6 +29,14 @@ struct DetailView: View {
                 } placeholder: { Color.gray.opacity(0.3).frame(width: 150, height: 225).cornerRadius(8) }
             Text(meta.name).font(.title2).bold().multilineTextAlignment(.center)
             if isSeries {
+                // Episode picker by title (from Cinemeta), with steppers as fallback.
+                Button {
+                    showEpisodes = true
+                } label: {
+                    Label("Episodes (\(episodes.count))", systemImage: "list.bullet")
+                        .frame(maxWidth: 240)
+                }
+                .buttonStyle(.bordered)
                 HStack {
                     Stepper("S\(season)", value: $season, in: 1...40)
                     Stepper("E\(episode)", value: $episode, in: 1...99)
@@ -48,6 +58,12 @@ struct DetailView: View {
         // Pre-warm the moment you land on a title (or change episode), so the
         // Play button starts instantly instead of waiting on Torrentio + load.
         .task(id: "\(meta.id)-\(season)-\(episode)") { await prewarm() }
+        .task { if isSeries { episodes = (try? await API(base: settings.base).episodes(id: meta.id)) ?? [] } }
+        .sheet(isPresented: $showEpisodes) {
+            EpisodeList(episodes: episodes, currentSeason: season, currentEpisode: episode) { s, e in
+                season = s; episode = e; showEpisodes = false
+            }
+        }
         .sheet(item: $playing) { stream in
             PlayerView(stream: stream, title: meta.name,
                        resumeKey: "pos-\(meta.id)-\(isSeries ? "\(season)-\(episode)" : "")")
@@ -81,5 +97,51 @@ struct DetailView: View {
             }
         } catch { self.error = "Couldn't load stream: \(error.localizedDescription)" }
         loading = false
+    }
+}
+
+/// Series episode picker with real titles from Cinemeta.
+struct EpisodeList: View {
+    let episodes: [API.Episode]
+    let currentSeason: Int
+    let currentEpisode: Int
+    let pick: (Int, Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if episodes.isEmpty {
+                    Text("No episode list available for this show").foregroundStyle(.secondary)
+                } else {
+                    List(episodes) { ep in
+                        Button {
+                            pick(ep.season ?? 1, ep.episode ?? 1)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                if let u = ep.thumbURL {
+                                    AsyncImage(url: u) { $0.resizable().frame(width: 70, height: 40).cornerRadius(4) }
+                                        .frame(width: 70, height: 40)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("S\(ep.season ?? 0)E\(ep.episode ?? 0)  \(ep.title)")
+                                        .font(.subheadline).lineLimit(2)
+                                    if let o = ep.overview, !o.isEmpty {
+                                        Text(o).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                    }
+                                }
+                                Spacer()
+                                if ep.season == currentSeason && ep.episode == currentEpisode {
+                                    Image(systemName: "checkmark").foregroundStyle(.blue)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Episodes")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
     }
 }
