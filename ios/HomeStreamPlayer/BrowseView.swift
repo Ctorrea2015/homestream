@@ -22,7 +22,7 @@ struct BrowseView: View {
     @State private var error = ""
     @State private var chip = "All"
 
-    private let chips = ["All", "Popular", "Trending", type == "movie" ? "Movies" : "Shows"]
+    private var chips: [String] { ["All", "Popular", "Trending", type == "movie" ? "Movies" : "Shows"] }
 
     var body: some View {
         NavigationStack {
