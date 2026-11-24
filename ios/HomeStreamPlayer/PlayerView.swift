@@ -24,6 +24,8 @@ struct PlayerView: View {
     @State private var selectedAudioTrack: Int = -1
     @State private var seekTo: Float = -1        // -1 = no pending seek; >=0 = seek to fraction
     @State private var duration: TimeInterval = 0
+    @State private var isPaused = false
+    @State private var volume: Float = 1.0
     @EnvironmentObject var settings: Settings
 
     private var convertedURL: URL? {
@@ -41,6 +43,8 @@ struct PlayerView: View {
             VLCPlayerView(url: stream.streamURL!,
                           startPosition: saved.float(forKey: resumeKey),
                           seekTo: $seekTo,
+                          isPaused: $isPaused,
+                          volume: $volume,
                           onProgress: { pos, t in position = pos; time = t },
                           onDuration: { d in duration = d },
                           onFinished: { saved.removeObject(forKey: resumeKey); dismiss() },
@@ -76,55 +80,74 @@ struct PlayerView: View {
 
             if showControls {
                 VStack {
-                    HStack {
-                        Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title2) }
-                        Spacer()
-                        Text(title).font(.headline).lineLimit(1)
-                        Spacer()
-                        // Audio language picker (only when the file has multiple tracks)
-                        if audioTracks.count > 1 {
-                            Button { showAudioPicker = true } label: {
-                                Image(systemName: "speaker.wave.2").font(.title3)
-                            }
-                        }
-                        // AirPlay — VLCKit can't route to AirPlay, so hand off
-                        // to Safari's native HLS player (which has real AirPlay).
-                        Button { showAirPlayInfo = true } label: {
-                            Image(systemName: "airplayvideo").font(.title3)
-                        }
-                        // Fullscreen = hide all controls (tap to bring them back)
+                    // Top bar — minimal, like the reference: close + PiP left,
+                    // speaker + volume slider right.
+                    HStack(spacing: 16) {
+                        Button { dismiss() } label: { Image(systemName: "xmark").font(.title3) }
                         Button { withAnimation { showControls = false } } label: {
-                            Image(systemName: "arrow.expand.rectangle").font(.title3)
+                            Image(systemName: "rectangle.on.rectangle").font(.title3)
                         }
-                        Button { saved.removeObject(forKey: resumeKey); playerID += 1 } label: {
-                            Image(systemName: "arrow.clockwise").font(.title3)
+                        Spacer()
+                        Button {
+                            if audioTracks.count > 1 { showAudioPicker = true }
+                            else withAnimation { volume = volume > 0 ? 0 : 1 }
+                        } label: {
+                            Image(systemName: volume > 0 ? "speaker.wave.3.fill" : "speaker.slash.fill").font(.subheadline)
+                        }
+                        Slider(value: $volume, in: 0...1).frame(width: 90)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20).padding(.top, 8)
+
+                    Spacer()
+
+                    // Center controls — ⏪15 / play-pause / ⏩15.
+                    HStack(spacing: 48) {
+                        Button { seekBy(-15) } label: {
+                            Image(systemName: "gobackward.15").font(.system(size: 30)).foregroundStyle(.white)
+                        }
+                        Button { isPaused.toggle() } label: {
+                            Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 42)).foregroundStyle(.white)
+                        }
+                        Button { seekBy(15) } label: {
+                            Image(systemName: "goforward.15").font(.system(size: 30)).foregroundStyle(.white)
                         }
                     }
-                    .padding().foregroundStyle(.white)
-                    .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom))
+
                     Spacer()
-                    VStack(spacing: 6) {
-                        Text(fmt(time)).font(.caption).monospacedDigit()
+
+                    // Bottom — thin seek bar with elapsed / remaining time.
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text(fmt(time)).font(.caption).monospacedDigit().foregroundStyle(.white)
+                            Spacer()
+                            Text("-\(fmt(max(0, duration - time)))").font(.caption).monospacedDigit().foregroundStyle(.white.opacity(0.8))
+                        }
                         Slider(value: $position, in: 0...1)
+                            .accentColor(.white)
                             .onChange(of: position) { v in
                                 saved.set(v, forKey: resumeKey)   // save resume position
                                 seekTo = v                         // seek the player
                             }
+                        // Secondary tools kept subtle below the seek bar.
                         HStack(spacing: 24) {
-                            // Skip back 15s / forward 30s by fraction of duration
-                            Button { seekBy(-15) } label: { Image(systemName: "gobackward.15").font(.title2) }
-                            Button { seekBy(30) } label: { Image(systemName: "goforward.30").font(.title2) }
+                            if audioTracks.count > 1 {
+                                Button { showAudioPicker = true } label: {
+                                    Label("Audio", systemImage: "speaker.wave.2").font(.caption)
+                                }
+                            }
+                            Button { showAirPlayInfo = true } label: {
+                                Label("AirPlay", systemImage: "airplayvideo").font(.caption)
+                            }
                             Spacer()
-                            Button { zoom = max(1.0, zoom - 0.2) } label: { Image(systemName: "minus.magnifyingglass") }
-                            Button { zoom = 1.0; lastZoom = 1.0 } label: { Text("Fit") }
-                            Button { zoom = min(3.0, zoom + 0.2) } label: { Image(systemName: "plus.magnifyingglass") }
-                            Spacer()
-                            Text("Pinch / double-tap to zoom").font(.caption2).foregroundStyle(.secondary)
+                            Button { zoom = 1.0; lastZoom = 1.0 } label: {
+                                Image(systemName: "arrow.expand.rectangle").font(.caption)
+                            }
                         }
-                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.9))
                     }
-                    .padding().background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    .padding()
+                    .padding(.horizontal, 20).padding(.bottom, 12)
                 }
             }
             if !playingOK || playerFailed {

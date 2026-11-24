@@ -10,6 +10,8 @@ struct VLCPlayerView: UIViewRepresentable {
     let startPosition: Float?
     // Seek commands from the parent: set to a 0...1 position to seek, -1 = idle.
     @Binding var seekTo: Float
+    @Binding var isPaused: Bool      // center play/pause toggle
+    @Binding var volume: Float       // 0...1, top-right volume slider
     let onProgress: (Float, TimeInterval) -> Void
     let onDuration: (TimeInterval) -> Void
     let onFinished: () -> Void
@@ -23,7 +25,7 @@ struct VLCPlayerView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(onProgress: onProgress, onDuration: onDuration, onFinished: onFinished, onPlaying: onPlaying,
                     onError: onError, onAudioTracks: onAudioTracks, selectedAudioTrack: $selectedAudioTrack,
-                    seekTo: $seekTo, startPosition: startPosition)
+                    seekTo: $seekTo, startPosition: startPosition, isPaused: $isPaused, volume: $volume)
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -43,6 +45,8 @@ struct VLCPlayerView: UIViewRepresentable {
         context.coordinator.applyAudioTrack(selectedAudioTrack)
         // When the parent requests a seek, apply it and clear the command.
         context.coordinator.applySeekIfNeeded()
+        // Play/pause + volume from the parent's controls.
+        context.coordinator.applyPlaybackState(isPaused: isPaused, volume: volume)
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -58,6 +62,8 @@ struct VLCPlayerView: UIViewRepresentable {
         var onAudioTracks: (([(index: Int, name: String)], Int) -> Void)?
         var selectedAudioTrack: Binding<Int>
         var seekTo: Binding<Float>
+        var isPaused: Binding<Bool>
+        var volume: Binding<Float>
         let startPosition: Float?
         var tracksReported = false
         var initialSeekDone = false
@@ -70,11 +76,14 @@ struct VLCPlayerView: UIViewRepresentable {
              onAudioTracks: (([(index: Int, name: String)], Int) -> Void)?,
              selectedAudioTrack: Binding<Int>,
              seekTo: Binding<Float>,
-             startPosition: Float?) {
+             startPosition: Float?,
+             isPaused: Binding<Bool>,
+             volume: Binding<Float>) {
             self.onProgress = onProgress; self.onDuration = onDuration; self.onFinished = onFinished
             self.onPlaying = onPlaying; self.onError = onError
             self.onAudioTracks = onAudioTracks; self.selectedAudioTrack = selectedAudioTrack
             self.seekTo = seekTo; self.startPosition = startPosition
+            self.isPaused = isPaused; self.volume = volume
         }
 
         /// Publish the available audio tracks once VLC has parsed the media.
@@ -102,6 +111,17 @@ struct VLCPlayerView: UIViewRepresentable {
             tracksReported = true
             let cb = onAudioTracks
             DispatchQueue.main.async { cb?(tracks, current) }
+        }
+
+        /// Apply play/pause and volume from the parent's controls.
+        func applyPlaybackState(isPaused: Bool, volume: Float) {
+            guard let p = player else { return }
+            if isPaused {
+                if p.state == .playing { p.pause() }
+            } else {
+                if p.state == .paused { p.play() }
+            }
+            if p.volume != volume { p.volume = volume }
         }
 
         /// Apply a pending seek from the parent, then clear it (-1).
