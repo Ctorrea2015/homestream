@@ -10,7 +10,18 @@ struct API {
         let type: String?
         let name: String
         let poster: String?
+        let background: String?
+        let description: String?
+        let year: String?
+        let runtime: String?
+        let genres: [String]?
+        let cast: [String]?
+        let imdbRating: String?
         var posterURL: URL? { poster.flatMap { URL(string: $0) } }
+        var backdropURL: URL? { background.flatMap { URL(string: $0) } ?? posterURL }
+        var metaLine: String {
+            [year, runtime, genres?.prefix(2).joined(separator: ", ")].compactMap { $0 }.joined(separator: " • ")
+        }
     }
 
     struct Stream: Identifiable, Decodable {
@@ -52,8 +63,7 @@ struct API {
         let u = URL(string: "https://v3-cinemeta.strem.io/meta/series/\(id).json")!
         let (data, res) = try await URLSession.shared.data(from: u)
         guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.http((res as? HTTPURLResponse)?.statusCode ?? 0) }
-        struct R: Decodable { let meta: M?; struct M: Decodable { let videos: [Episode]? } }
-        let videos = (try? JSONDecoder().decode(R.self, from: data))?.meta?.videos ?? []
+        let videos = (try? JSONDecoder().decode(CinemetaMetaResponse.self, from: data))?.meta?.videos ?? []
         // Drop specials (season 0) and sort by season/episode.
         return videos.filter { ($0.season ?? 0) > 0 }
             .sorted { (a, b) in

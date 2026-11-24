@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DetailView: View {
     let meta: API.Meta
@@ -13,6 +14,9 @@ struct DetailView: View {
     @State private var preloadKey = ""             // which title/episode was warmed
     @State private var episodes: [API.Episode] = []
     @State private var showEpisodes = false
+    @State private var favorite = false
+    @State private var dlNote = false
+    @Environment(\.dismiss) private var dismiss
 
     // Explicit init: @EnvironmentObject makes the memberwise initializer
     // private, so callers in BrowseView can't construct DetailView otherwise.
@@ -24,39 +28,137 @@ struct DetailView: View {
     var isSeries: Bool { (type == "series") || (meta.type ?? "") == "series" }
 
     var body: some View {
-        VStack(spacing: 16) {
-            AsyncImage(url: meta.posterURL) { $0.resizable().frame(width: 150, height: 225).cornerRadius(8)
-                } placeholder: { Color.gray.opacity(0.3).frame(width: 150, height: 225).cornerRadius(8) }
-            Text(meta.name).font(.title2).bold().multilineTextAlignment(.center)
-            if isSeries {
-                // Episode picker by title (from Cinemeta), with steppers as fallback.
-                Button {
-                    showEpisodes = true
-                } label: {
-                    Label("Episodes (\(episodes.count))", systemImage: "list.bullet")
-                        .frame(maxWidth: 240)
+        ScrollView {
+            // Full-bleed backdrop with overlaid back/favorite and orange Play.
+            ZStack(alignment: .top) {
+                AsyncImage(url: meta.backdropURL) { img in
+                    img.resizable().scaledToFill().frame(height: 360).clipped()
+                } placeholder: {
+                    LinearGradient(colors: [.gray.opacity(0.4), .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 360)
                 }
-                .buttonStyle(.bordered)
+                LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 360)
                 HStack {
-                    Stepper("S\(season)", value: $season, in: 1...40)
-                    Stepper("E\(episode)", value: $episode, in: 1...99)
-                }.padding(.horizontal)
+                    Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3) }
+                    Spacer()
+                    Button { favorite.toggle() } label: {
+                        Image(systemName: favorite ? "heart.fill" : "heart").font(.title3)
+                    }
+                }
+                .foregroundStyle(.white).padding(.horizontal, 20).padding(.top, 12)
+                // Orange play button anchored bottom-right of the backdrop.
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await play() }
+                        } label: {
+                            if loading { ProgressView().tint(.white) }
+                            else { Image(systemName: "play.fill").font(.title2) }
+                        }
+                        .foregroundStyle(.white)
+                        .frame(width: 62, height: 62)
+                        .background(Color.orange, in: Circle())
+                        .disabled(loading)
+                    }
+                }
+                .frame(height: 360).padding(.trailing, 22).padding(.bottom, 18)
             }
-            if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
-            if preloaded != nil && !loading {
-                Text("Ready to play · started downloading").font(.caption).foregroundStyle(.green)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(meta.name).font(.title).bold()
+                HStack(spacing: 8) {
+                    Text(meta.metaLine).font(.subheadline).foregroundStyle(.secondary)
+                    Text("HD").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption)
+                    Text(meta.imdbRating ?? "—").font(.subheadline).bold()
+                    Text("1.2K reviews").font(.caption).foregroundStyle(.secondary)
+                }
+                if let d = meta.description, !d.isEmpty {
+                    Text(d).font(.subheadline).foregroundStyle(.secondary).lineLimit(4)
+                }
+
+                // Episodes (series only)
+                if isSeries {
+                    Button { showEpisodes = true } label: {
+                        Label("Episodes (\(episodes.count))", systemImage: "list.bullet").frame(maxWidth: .infinity)
+                    }.buttonStyle(.bordered)
+                    HStack {
+                        Stepper("S\(season)", value: $season, in: 1...40)
+                        Stepper("E\(episode)", value: $episode, in: 1...99)
+                    }
+                }
+
+                // Action buttons: My List / Download (Safari handoff) / Share
+                HStack(spacing: 32) {
+                    Button {
+                        favorite.toggle()
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: favorite ? "checkmark.circle.fill" : "plus").font(.title3)
+                            Text("My List").font(.caption2)
+                        }
+                    }
+                    Button {
+                        if let u = streamURLForShare() { UIApplication.shared.open(u) }
+                        dlNote = true
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.down.to.line").font(.title3)
+                            Text("Download").font(.caption2)
+                        }
+                    }
+                    if let shareURL = streamURLForShare() {
+                        ShareLink(item: shareURL) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "square.and.arrow.up").font(.title3)
+                                Text("Share").font(.caption2)
+                            }
+                        }
+                    }
+                }
+                .foregroundStyle(.primary).padding(.vertical, 6)
+                if dlNote { Text("Opened in Safari — use Share → Save to Files to keep it").font(.caption2).foregroundStyle(.secondary) }
+
+                if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) }
+                if preloaded != nil && !loading {
+                    Text("Ready to play · started downloading").font(.caption).foregroundStyle(.green)
+                }
+
+                // Cast
+                if let cast = meta.cast, !cast.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Cast").font(.headline)
+                            Spacer()
+                            Text("View all").font(.caption).foregroundStyle(.orange)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(cast.prefix(10), id: \.self) { name in
+                                    VStack(spacing: 4) {
+                                        ZStack {
+                                            Circle().fill(Color.gray.opacity(0.3)).frame(width: 54, height: 54)
+                                            Text(initials(name)).font(.headline).foregroundStyle(.white)
+                                        }
+                                        Text(name).font(.caption2).lineLimit(1).frame(width: 54)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
             }
-            Button {
-                Task { await play() }
-            } label: {
-                if loading { ProgressView() } else { Label("▶ Play", systemImage: "play.fill").frame(maxWidth: 240) }
-            }
-            .buttonStyle(.borderedProminent).disabled(loading)
-            Spacer()
+            .padding(.horizontal, 20)
         }
-        .padding().navigationTitle("Details")
-        // Pre-warm the moment you land on a title (or change episode), so the
-        // Play button starts instantly instead of waiting on Torrentio + load.
+        .background(Color.black.ignoresSafeArea())
+        .navigationBarHidden(true)
         .task(id: "\(meta.id)-\(season)-\(episode)") { await prewarm() }
         .task { if isSeries { episodes = (try? await API(base: settings.base).episodes(id: meta.id)) ?? [] } }
         .sheet(isPresented: $showEpisodes) {
@@ -72,6 +174,23 @@ struct DetailView: View {
 
     func currentId() -> String {
         isSeries ? "\(meta.id):\(season):\(episode)" : meta.id
+    }
+
+    /// A URL for Download/Share — resolve through the server so it opens a
+    /// real playable stream (Safari handoff for Download).
+    func streamURLForShare() -> URL? {
+        var c = URLComponents(url: settings.base.appendingPathComponent("/api/torrent/resolve"), resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "id", value: currentId()), URLQueryItem(name: "type", value: isSeries ? "series" : "movie")]
+        if isSeries {
+            items.append(URLQueryItem(name: "s", value: String(season)))
+            items.append(URLQueryItem(name: "e", value: String(episode)))
+        }
+        c.queryItems = items
+        return c.url
+    }
+
+    func initials(_ name: String) -> String {
+        name.split(separator: " ").prefix(2).compactMap { $0.first }.map(String.init).joined()
     }
 
     func prewarm() async {
