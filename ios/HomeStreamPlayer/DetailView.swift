@@ -83,6 +83,18 @@ struct DetailView: View {
                     Text(d).font(.subheadline).foregroundStyle(.secondary).lineLimit(4)
                 }
 
+                // Prominent Play button — always visible in portrait (the
+                // backdrop overlay button can be hard to reach).
+                Button {
+                    Task { await play() }
+                } label: {
+                    if loading { ProgressView().tint(.white).frame(maxWidth: .infinity) }
+                    else { Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .disabled(loading)
+
                 // Episodes (series only)
                 if isSeries {
                     Button { showEpisodes = true } label: {
