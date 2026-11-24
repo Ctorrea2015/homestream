@@ -82,11 +82,25 @@ struct SearchView: View {
         // Strict percent-encoding (spaces -> %20, not '+') so Cinemeta parses it.
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let enc = q.addingPercentEncoding(withAllowedCharacters: allowed) ?? q
-        let urlStr = "https://cinemeta-live.strem.io/catalog/movie/top/search=\(enc).json"
-        let data = try? await URLSession.shared.data(from: URL(string: urlStr)!).0
-        let found = (try? JSONDecoder().decode(Catalog.self, from: data ?? Data()))?.metas ?? []
-        results = found
+        // Search BOTH catalogs — previously only /movie/ was queried, so TV
+        // shows never appeared in the Search tab (2026-11-24).
+        async let movieData = fetchCatalog("movie", enc)
+        async let seriesData = fetchCatalog("series", enc)
+        let movies = await movieData
+        let series = await seriesData
+        // Combine, dedupe by id (a title can appear in both catalogs).
+        var seen = Set<String>()
+        var merged: [API.Meta] = []
+        for m in movies + series where seen.insert(m.id).inserted { merged.append(m) }
+        results = merged
         searching = false
+    }
+
+    func fetchCatalog(_ type: String, _ enc: String) async -> [API.Meta] {
+        let urlStr = "https://cinemeta-live.strem.io/catalog/\(type)/top/search=\(enc).json"
+        guard let url = URL(string: urlStr),
+              let data = try? await URLSession.shared.data(from: url).0 else { return [] }
+        return (try? JSONDecoder().decode(Catalog.self, from: data))?.metas ?? []
     }
     struct Catalog: Decodable { let metas: [API.Meta] }
 }
