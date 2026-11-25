@@ -135,6 +135,11 @@ export async function GET(request) {
   if (riptide) engines.push({ name: "Riptide", host: riptide, forced: engine === "riptide" });
   if (!engine || engine === "rqbit") engines.push({ name: "rqbit", host: null, forced: engine === "rqbit" });
 
+  // A forced engine must use that engine alone — if it's unavailable, return
+  // 504 instead of silently falling through to qB/webtorrent.
+  if (engine === "riptide" && !riptide) {
+    return NextResponse.json({ error: "Riptide is not configured (forced ?engine=riptide)" }, { status: 504 });
+  }
   for (const eng of engines) {
     const fails = rqFail(eng.name);
     const failEntry = fails.get(infoHash);

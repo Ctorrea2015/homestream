@@ -249,7 +249,7 @@ export async function GET(request, { params }) {
     if (best) {
       const abs0 = new URL(best.url, base);
       if (abs0.pathname === "/api/torrent/stream") {
-        const h = abs0.searchParams.get("infoHash");
+        let h = abs0.searchParams.get("infoHash");
         const hint = (abs0.searchParams.get("name") || "") + epTag;
         const trs = abs0.searchParams.getAll("tr");
         if (h && /^[a-f0-9]{40}$/i.test(h)) {

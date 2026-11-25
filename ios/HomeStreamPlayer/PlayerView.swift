@@ -127,12 +127,15 @@ struct PlayerView: View {
                             Spacer()
                             Text("-\(fmt(max(0, duration - time)))").font(.caption).monospacedDigit().foregroundStyle(.white.opacity(0.8))
                         }
-                        Slider(value: $position, in: 0...1)
-                            .accentColor(.white)
-                            .onChange(of: position) { v in
-                                saved.set(v, forKey: resumeKey)   // save resume position
-                                seekTo = v                         // seek the player
+                        Slider(value: Binding(
+                            get: { position },
+                            set: { v in
+                                position = v                 // user drag only
+                                saved.set(v, forKey: resumeKey)
+                                seekTo = v                   // explicit user seek
                             }
+                        ), in: 0...1)
+                            .accentColor(.white)
                         // Secondary tools kept subtle below the seek bar.
                         HStack(spacing: 24) {
                             if audioTracks.count > 1 {

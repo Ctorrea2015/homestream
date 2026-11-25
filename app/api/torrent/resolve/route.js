@@ -175,6 +175,7 @@ async function resolve(request, body) {
         const primaryHost = await riptideHost();
         let loaded = null;
         let engine = primaryHost ? "Riptide" : "rqbit";
+        let loadedHost = primaryHost || null;   // host of the engine that actually loaded it
         let rqbitStreamUrl = null;
         let ready = null;
         for (const candidate of [
@@ -187,6 +188,7 @@ async function resolve(request, body) {
               loaded = { name: r.name, size: r.size };
               rqbitStreamUrl = r.streamUrl;
               engine = candidate.name;
+              loadedHost = candidate.host;
               break;
             }
           } catch (e) {
@@ -209,6 +211,7 @@ async function resolve(request, body) {
           if (q) {
             loaded = { name: q.name, size: q.size };
             engine = "qb";
+            loadedHost = "qb";     // qB has no /torrents/{hash}/stats — skip rqbit-style verification
           }
         } catch (e) {
           errors.push(`${infoHash.slice(0, 10)}: qb: ${String(e?.message || e).slice(0, 70)}`);
@@ -230,10 +233,12 @@ async function resolve(request, body) {
       //   • peers present → wait up to 15s for real bytes before deciding
       //   • unknown (-1) → fall through to byte-wait (don't skip blindly)
       let flowOk = true; // default: don't block when we can't verify
-      {
+      // qB has no rqbit-style stats API — verify byte flow via the warm read
+      // below instead; the rqbit-family check only applies to Riptide/rqbit.
+      if (engine !== "qb") {
         const rid = infoHash; // stream URL now uses the hash; use it directly for stats polling
         if (rid) {
-          const host = engine === "Riptide" ? primaryHost : null;
+          const host = loadedHost;
           await new Promise((r) => setTimeout(r, 1500)); // brief grace for peers to connect
           const peers = await rqPeerCount(rid, host);
           if (peers.live === 0) {
@@ -255,8 +260,7 @@ async function resolve(request, body) {
       // Optional: block until the first pieces actually arrive (rqbit only).
       if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
           String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1") {
-        const id = infoHash;
-        ready = await rqWaitForData(id, infoHash, 20000, primaryHost);
+        ready = await rqWaitForData(infoHash, infoHash, 20000, engine === "qb" ? null : loadedHost);
       }
 
       return NextResponse.json({

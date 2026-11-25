@@ -74,8 +74,10 @@ function scrapeTracker(host, port, hashBuf) {
         sock.once("message", (reply) => {
           clearTimeout(timer);
           try {
+            // BEP15 scrape reply: action@0, transaction@4, seeders@8,
+            // completed@12, leechers@16.
             if (reply.readUInt32BE(0) !== 2 || reply.length < 20) throw new Error("bad scrape");
-            resolve({ seeders: reply.readUInt32BE(16), leechers: reply.readUInt32BE(12) });
+            resolve({ seeders: reply.readUInt32BE(8), leechers: reply.readUInt32BE(16) });
           } catch { resolve(null); }
           try { sock.close(); } catch {}
         });
@@ -307,7 +309,7 @@ function serveFile(res, file, range, method) {
     if (m && m[2]) end = Math.min(parseInt(m[2], 10), st.size - 1);
     if (isNaN(start) || start > end) start = 0;
     const ext = path.extname(file).toLowerCase();
-    const ct = { ".mkv": "video/x-matroska", ".mp4": "video/mp4", ".avi": "video/x-msvideo", ".mov": "video/quickstart" }[ext] || "application/octet-stream";
+    const ct = { ".mkv": "video/x-matroska", ".mp4": "video/mp4", ".avi": "video/x-msvideo", ".mov": "video/quicktime" }[ext] || "application/octet-stream";
     const headers = { "Content-Type": ct, "Accept-Ranges": "bytes", "Content-Length": String(end - start + 1) };
     if (m) headers["Content-Range"] = `bytes ${start}-${end}/${st.size}`;
     res.writeHead(m ? 206 : 200, headers);

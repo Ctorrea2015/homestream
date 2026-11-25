@@ -61,16 +61,27 @@ object Api {
         }
     } catch (e: Exception) { emptyList() }
 
-    fun search(query: String): List<Meta> = try {
-        val url = "https://v3-cinemeta.strem.io/catalog/movie/top/search=${Settings.encoded(query)}.json"
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 20000; c.readTimeout = 20000
-        val arr = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONArray("metas") ?: JSONArray()
-        (0 until arr.length()).mapNotNull { i ->
-            val o = arr.getJSONObject(i)
-            Meta(o.optString("id"), o.optString("name"), "movie", o.optString("poster").ifBlank { null })
+    fun search(query: String): List<Meta> {
+        val found = mutableListOf<Meta>()
+        val seen = HashSet<String>()
+        // Search BOTH movie and series catalogs — TV shows never appeared
+        // when only the movie catalog was queried.
+        for (type in listOf("movie", "series")) {
+            try {
+                val url = "https://v3-cinemeta.strem.io/catalog/$type/top/search=${Settings.encoded(query)}.json"
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 20000; c.readTimeout = 20000
+                val arr = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONArray("metas") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val id = o.optString("id")
+                    if (id.isEmpty() || !seen.add(id)) continue
+                    found.add(Meta(id, o.optString("name"), o.optString("type", type), o.optString("poster").ifBlank { null }))
+                }
+            } catch (_: Exception) {}
         }
-    } catch (e: Exception) { emptyList() }
+        return found
+    }
 
     /** One-tap resolve — same as the iPhone app: pre-warmed source, Riptide. */
     fun resolve(id: String, type: String, season: Int?, episode: Int?): Playable? = try {

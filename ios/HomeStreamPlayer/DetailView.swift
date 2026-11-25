@@ -191,14 +191,12 @@ struct DetailView: View {
     /// A URL for Download/Share — resolve through the server so it opens a
     /// real playable stream (Safari handoff for Download).
     func streamURLForShare() -> URL? {
-        var c = URLComponents(url: settings.base.appendingPathComponent("/api/torrent/resolve"), resolvingAgainstBaseURL: false)!
-        var items = [URLQueryItem(name: "id", value: currentId()), URLQueryItem(name: "type", value: isSeries ? "series" : "movie")]
-        if isSeries {
-            items.append(URLQueryItem(name: "s", value: String(season)))
-            items.append(URLQueryItem(name: "e", value: String(episode)))
-        }
-        c.queryItems = items
-        return c.url
+        // /api/torrent/resolve returns JSON, not a playable stream. Point
+        // Safari at the converter HLS instead so Download/Share shows video.
+        let enc = currentId().addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? currentId()
+        let src = "\(settings.serverURL)/api/torrent/resolve?id=\(enc)&type=\(isSeries ? "series" : "movie")"
+        let srcEnc = src.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? src
+        return URL(string: "\(settings.serverURL)/api/tv/transcode?u=\(srcEnc)&f=hls&vod=1")
     }
 
     func initials(_ name: String) -> String {
