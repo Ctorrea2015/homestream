@@ -149,8 +149,12 @@ export async function GET(request) {
         console.log(`[stream] ${eng.name} engine serving ${r.name} (${Math.round(r.size / 1048576)} MB)`);
         touchStream(infoHash);
         const rid = r.streamUrl.split("/torrents/")[1]?.split("/")[0];
-        const warmed = await rqWaitForData(rid, infoHash, 60000, eng.host);
-        if (!warmed) console.error(`[stream] ${eng.name}: no first bytes after 60s — serving ${r.name} anyway`);
+        // Short warm-up only. The resolver already verifies first bytes before
+        // returning this URL, so a long 60s hold here is redundant — and with
+        // hash-based stream URLs the stats poll can fail, making every play
+        // stall ~50s. 8s is a safety net, not a gate.
+        const warmed = await rqWaitForData(rid, infoHash, 8000, eng.host);
+        if (!warmed) console.error(`[stream] ${eng.name}: no first bytes after 8s — serving ${r.name} anyway`);
         const upstream = await fetch(r.streamUrl, {
           headers: { "User-Agent": "HomeStream/1.0 VLC/3.0", ...(rangeHeader ? { Range: rangeHeader } : {}) },
           redirect: "follow",
