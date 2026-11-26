@@ -150,7 +150,9 @@ class MainActivity : Activity() {
                         val row = PosterRow(this, "RESULTS FOR \"${q.uppercase()}\"")
                         found.forEach { m -> row.add(m) {
                             thread {
-                                val p = Api.resolve(m.id, "movie", null, null)
+                                val isSeries = m.type == "series"
+                                val p = Api.resolve(if (isSeries) "${m.id}:1:1" else m.id, m.type,
+                                    if (isSeries) 1 else null, if (isSeries) 1 else null)
                                 runOnUiThread { if (p != null) PlayerActivity.open(this, p.url, m.name)
                                     else Toast.makeText(this, "No source", Toast.LENGTH_SHORT).show() }
                             }

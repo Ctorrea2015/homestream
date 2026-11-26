@@ -159,7 +159,7 @@ async function resolve(request, body) {
     ? ` S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(3, "0")}`
     : "";
   const errors = [];
-  for (const cand of ranked.slice(0, 3)) {
+  for (const cand of ranked.slice(0, 8)) {
     const abs = new URL(cand.url, base);
     const infoHash = String(abs.searchParams.get("infoHash") || "").toLowerCase();
     const nameHint = (abs.searchParams.get("name") || "") + epTag;
@@ -257,10 +257,16 @@ async function resolve(request, body) {
         }
       }
 
-      // Optional: block until the first pieces actually arrive (rqbit only).
-      if (String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
-          String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1") {
-        ready = await rqWaitForData(infoHash, infoHash, 20000, engine === "qb" ? null : loadedHost);
+      // Optional: block until the first pieces actually arrive. Only possible
+      // for rqbit-family engines — qB has no /torrents/{hash}/stats, so polling
+      // it would target the stock daemon and burn 20s on a foreign hash. The
+      // warm-read above already confirms qB byte flow.
+      const wantsWait = String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "true" ||
+                        String(body?.wait ?? request.nextUrl.searchParams.get("wait") ?? "") === "1";
+      if (wantsWait && engine !== "qb") {
+        ready = await rqWaitForData(infoHash, infoHash, 20000, loadedHost);
+      } else if (wantsWait && engine === "qb") {
+        ready = true; // warm read above already fetched head bytes
       }
 
       return NextResponse.json({

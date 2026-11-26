@@ -65,11 +65,13 @@ function scrapeTracker(host, port, hashBuf) {
         const action = msg.readUInt32BE(0);
         if (action !== 0) throw new Error("connect action");
         const cid = msg.subarray(8, 16);
+        // BEP15 scrape request: connection_id@0 (8B), action@8 (2=scrape),
+        // transaction_id@12 (4B), then 20-byte info_hash@16 → 36 bytes total.
         const req = Buffer.alloc(36);
-        Buffer.from("0000041727101980", "hex").copy(req, 0); // protocol id
+        cid.copy(req, 0);
         req.writeUInt32BE(2, 8);                            // action=2 (scrape)
-        cid.copy(req, 12);
-        hashBuf.copy(req, 20);
+        req.writeUInt32BE(0x51a5, 12);                      // transaction id
+        hashBuf.copy(req, 16);                              // full 20-byte hash
         sock.send(req, port, host);
         sock.once("message", (reply) => {
           clearTimeout(timer);
@@ -219,7 +221,7 @@ const qbb = {
   },
   async list() {
     const all = await qb("/torrents/info");
-    return (Array.isArray(all) ? all : []).map((t, id) => ({ id, info_hash: String(t.hash || "").toLowerCase(), name: t.name, total_pieces: 0, _hash: t.hash }));
+    return (Array.isArray(all) ? all : []).map((t, id) => ({ id, info_hash: String(t.hash || "").toLowerCase(), name: t.name, total_pieces: 0, _hash: t.hash, save_path: t.save_path || "" }));
   },
   async add(hash, { body, ctype, trackers }) {
     let addBody;
@@ -227,11 +229,9 @@ const qbb = {
     if (/x-bittorrent/i.test(ctype)) {
       // qB accepts .torrent uploads as multipart/form-data
       const fd = "----hs" + Date.now();
-      const parts = [
-        `--${fd}\r\nContent-Disposition: form-data; name="torrents"; filename="torrent.torrent"\r\nContent-Type: application/x-bittorrent\r\n\r\n`,
-        ...body, `\r\n--${fd}--\r\n`,
-      ];
-      addBody = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p)));
+      const header = Buffer.from(`--${fd}\r\nContent-Disposition: form-data; name="torrents"; filename="torrent.torrent"\r\nContent-Type: application/x-bittorrent\r\n\r\n`);
+      const footer = Buffer.from(`\r\n--${fd}--\r\n`);
+      addBody = Buffer.concat([header, Buffer.from(body), footer]);
       const r = await fetch(`${CFG.qbUrl}/api/v2/torrents/add`, { method: "POST", headers: { ...cookies, "Content-Type": `multipart/form-data; boundary=${fd}` }, body: addBody, signal: AbortSignal.timeout(20000) });
       if (!r.ok && r.status !== 409) throw new Error(`qB add -> HTTP ${r.status}`);
     } else {
@@ -365,7 +365,7 @@ setInterval(async () => {
           try { await BE.delete(id); } catch {}
           liveness.delete(String(id));
           const out = await BE.add(next, { body: `magnet:?xt=urn:btih:${next}`, ctype: "text/plain", trackers: [] });
-          liveness.set(String(out.id), { at: now, addAt: now, seeders: await verifySeeders(next), alts: e.alts, focus: [] });
+          liveness.set(next, { at: now, addAt: now, seeders: await verifySeeders(next), alts: e.alts, focus: [] });
           continue;
         }
       } catch {}
@@ -430,8 +430,10 @@ http.createServer(async (req, res) => {
         return j(res, 409, { error_kind: "dead_swarm", human_readable: `no live seeders (${seeders}) — try another source`, seeders });
       }
       const out = await BE.add(hash, { body: /x-bittorrent/i.test(ctype) ? buf : buf.toString(), ctype, trackers: trQ });
-      // Alternates for engine-side failover (#3): ?alt=<hash>&alt=<hash>
-      liveness.set(String(out.id), {
+      // Key liveness by the STABLE hash — every downstream touch/delete uses
+      // the hash in the URL, so a numeric index would never be refreshed and
+      // would point at a different torrent after any add/delete.
+      liveness.set(hash, {
         at: Date.now(), addAt: Date.now(), seeders,
         alts: u.searchParams.getAll("alt").map((h) => h.toLowerCase()).filter((h) => /^[a-f0-9]{40}$/.test(h)),
         focus: [],

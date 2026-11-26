@@ -46,8 +46,15 @@ function startSegmenter(index, url, ffmpeg) {
   const entry = { dir, proc, at: Date.now() };
   running.set(index, entry);
   proc.on("exit", () => { if (running.get(index) === entry) running.delete(index); });
-  // Hard cap: never let a segmenter run forever unattended (>6 h).
-  setTimeout(() => { if (running.get(index) === entry) { try { proc.kill(); } catch {} running.delete(index); } }, 6 * 60 * 60 * 1000).unref?.();
+  // Idle cap: kill only if NO viewer has fetched the playlist recently. The
+  // playlist handler below refreshes entry.at on every request, so an active
+  // 6+ hour stream stays alive; an abandoned one is reclaimed after 10 min.
+  const idleCheck = () => {
+    if (running.get(index) !== entry) return;
+    if (Date.now() - entry.at > 10 * 60 * 1000) { try { proc.kill(); } catch {} running.delete(index); }
+    else setTimeout(idleCheck, 10 * 60 * 1000).unref?.();
+  };
+  setTimeout(idleCheck, 10 * 60 * 1000).unref?.();
   return entry;
 }
 
@@ -85,13 +92,14 @@ async function hlsHandler(request) {
   if (!ch?.url) return NextResponse.json({ error: "Channel not found" }, { status: 404 });
 
   let e = running.get(index);
-  if (!e || e.proc.exitCode !== null || Date.now() - e.at > 6 * 60 * 60 * 1000) {
+  if (!e || e.proc.exitCode !== null) {
     const found = await findFfmpeg();
     const ffmpeg = typeof found === "string" ? found : found?.ffmpeg;
     if (!ffmpeg) return NextResponse.json({ error: "ffmpeg not available for HLS segmentation" }, { status: 502 });
     e = startSegmenter(index, ch.url, ffmpeg);
   }
 
+  e.at = Date.now(); // a viewer is here — refresh idle timer
   // Wait briefly for the first segments to be written.
   for (let i = 0; i < 30; i++) {
     try {

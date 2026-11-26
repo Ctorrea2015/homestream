@@ -144,7 +144,7 @@ struct VLCPlayerView: UIViewRepresentable {
             reportAudioTracksIfNeeded() // tracks become available after playback starts
             let dur = TimeInterval(p.media?.length.intValue ?? 0) / 1000.0
             if dur > 0 { onDuration(dur) }
-            onProgress(p.position, TimeInterval(p.time.intValue))
+            onProgress(p.position, TimeInterval(p.time.intValue) / 1000.0) // VLC time is ms; UI expects seconds
         }
         func mediaPlayerStateChanged(_ aNotification: Notification) {
             guard let p = player else { return }
