@@ -29,6 +29,10 @@ export async function register() {
     // it in place, no reboot needed.
     const { startRqbitWatchdog } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/rqbitWatchdog.js`);
     startRqbitWatchdog();
+    // Doctor: periodic health check tying together the watchdogs; reports
+    // to /api/doctor, auto-fixes only safe runtime state (no code changes).
+    const { startDoctor } = await import(/* webpackIgnore: true */ `${cwdUrl}/lib/doctor.js`);
+    startDoctor();
   } catch {
     // The app still works fully manually if this fails.
   }
