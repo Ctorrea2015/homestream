@@ -290,7 +290,10 @@ const qbb = {
   async streamPath(id, idx) {
     const t = await qbb.byKey(id);
     if (!t) throw new Error("no such torrent");
-    const files = await this.detail(t.id);
+    // Use t.info_hash (STABLE), not t.id (array index that shifts when any
+    // torrent is added/removed) — detail(index) can point at a different
+    // torrent or out of range, producing "no such torrent" on playback.
+    const files = await this.detail(t.info_hash);
     const f = files.files[idx];
     if (!f) throw new Error("no such file index");
     return path.join(files.output_folder || "", f.name);
