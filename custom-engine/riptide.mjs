@@ -182,7 +182,16 @@ async function qb(ep, init = {}) {
     }
   }
   const cookieHeader = sid ? { Cookie: `SID=${sid}` } : {};
-  const r = await fetch(`${CFG.qbUrl}/api/v2${ep}`, { ...init, headers: { ...cookieHeader, ...(init.headers || {}) }, signal: AbortSignal.timeout(12000) });
+  let r = await fetch(`${CFG.qbUrl}/api/v2${ep}`, { ...init, headers: { ...cookieHeader, ...(init.headers || {}) }, signal: AbortSignal.timeout(12000) });
+  if (r.status === 403 && sid) {           // qB session expired — re-login and retry
+    sid = null;
+    const form = new URLSearchParams({ username: CFG.qbUser, password: CFG.qbPass });
+    const lr = await fetch(`${CFG.qbUrl}/api/v2/auth/login`, { method: "POST", body: form, signal: AbortSignal.timeout(8000) });
+    const sc = lr.headers.get("set-cookie") || "";
+    sid = /SID=[^;]+/.exec(sc)?.[0]?.replace(/^SID=/, "") || "";
+    const retryHeaders = sid ? { Cookie: `SID=${sid}` } : {};
+    r = await fetch(`${CFG.qbUrl}/api/v2${ep}`, { ...init, headers: { ...retryHeaders, ...(init.headers || {}) }, signal: AbortSignal.timeout(12000) });
+  }
   if (!r.ok) throw new Error(`qB ${ep} -> HTTP ${r.status}`);
   const ct = r.headers.get("content-type") || "";
   return /json/.test(ct) ? r.json() : r.text();
